@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~24.5k lines of hand-written NASM. The game is a single 217 KB executable.
+~26k lines of hand-written NASM. The game is a single 230 KB executable.
 
 **What's inside**
 
@@ -32,6 +32,13 @@ files. The village, sprites, light, weather and sound are all produced by
   with contact-hardening soft shadows from a height map, sodium street lamps
   and lit windows baked with ray-cast shadows, and a flashlight. It also has a
   view cone that greys out what you cannot see, bloom and a frost overlay.
+- **Fast on every core.** Per-row passes run on a small thread pool, the moon
+  shadow sweep runs in the background while objects are drawn, and HUD text and
+  presenting happen on their own output thread. The lighting pass has an AVX2
+  path (8 pixels per step) next to the SSE2 one. Every path produces the same
+  frame down to the byte, which is checked against the single-threaded SSE2
+  build. On an i7-7700 a frame takes about 3–4 ms, up from about 12 ms
+  single-threaded.
 - **The world.** Gabled snow roofs are rasterized in world planes with
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
@@ -83,9 +90,12 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | `--sndtest` | every sound event and ambience in a row → `sndtest.wav` |
 | `--hb`, `--lm`, `--wind`, `--soak` | hitboxes, baked lamp light, wind field from above, 3000-frame soak |
 | `--fs`, `--alog` | start fullscreen; log audio buffer underruns to `alog.bin` |
+| `--intro` (with a shot) | draws the title overlay over the shot |
+| `--bench` (with a shot) | runs the scene in a live window for 600 frames and writes per-pass timings to `bench.bin` |
+| `--threads N`, `--noavx` | limit the render thread pool; use only the SSE2 path |
 
-`build/topng.ps1 -n "1,b"` converts shots to PNG, and `build/bench.ps1 -n 1`
-gives per-pass render timings.
+`build/topng.ps1 -n "1,b"` converts shots to PNG. `build/bench.ps1 -n 1` runs
+`--bench` and prints min / median / p90 for every pass.
 
 ## Русский
 
@@ -94,8 +104,8 @@ gives per-pass render timings.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~24.5 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 217 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~26 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 230 КБ.
 
 **Что внутри**
 
@@ -103,6 +113,11 @@ gives per-pass render timings.
   нормали, мировые координаты) и отложенное освещение на SSE2: луна с мягкими
   тенями по карте высот, натриевые фонари и окна с запечёнными тенями, фонарик.
   Ещё там конус обзора (невидимое — серой памятью), блум и иней по краям экрана.
+- **На всех ядрах.** Построчные проходы идут на пуле потоков, тени луны
+  считаются фоном, пока рисуются объекты, надписи и вывод в окно — в своём
+  потоке. У освещения есть путь на AVX2 (8 пикселей за шаг) рядом с SSE2. Все
+  пути дают один и тот же кадр до байта, это сверяется с однопоточной SSE2-сборкой.
+  На i7-7700 кадр занимает около 3–4 мс (было около 12 мс в одном потоке).
 - **Мир.** Двускатные крыши в снегу растеризуются в мировых плоскостях с
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют
@@ -127,6 +142,8 @@ R — заново, Esc — выход.
 
 **Проверка без игры:** флаги `--shotN`, `--wav`, `--sndtest` и остальные из
 таблицы выше пишут снимки сцен и их звук в файлы. Так игра и разрабатывалась.
+`--bench` с `build/bench.ps1` меряют каждый проход кадра, `--threads N` и `--noavx`
+ограничивают потоки и отключают AVX2.
 
 ## Screenshots
 
