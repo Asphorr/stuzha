@@ -17,6 +17,8 @@ align 32, db 0
 lx_bw0:   db 0,1,0,1,0,1,0,1, 8,9,8,9,8,9,8,9, 0,1,0,1,0,1,0,1, 8,9,8,9,8,9,8,9
 lx_bw3:   db 6,7,6,7,6,7,6,7, 14,15,14,15,14,15,14,15, 6,7,6,7,6,7,6,7, 14,15,14,15,14,15,14,15
 lx_w255:  times 16 dw 255
+lx_wlmax: times 4 dw 1023, 1023, 1023, 255
+lx_w2047: times 16 dw 2047
 lx_w64:   times 16 dw 64
 lx_w190:  times 16 dw 190
 lx_gray:  times 4 dw 1, 2, 1, 0
@@ -63,6 +65,7 @@ LX_HAZE  equ 416
 LX_END   equ 448                        ; конец диапазона, пиксель
 LX_MOON  equ 452                        ; есть ли луна
 LX_DRF   equ 456                        ; в группе есть позёмка
+LX_PIX   equ 460                        ; пиксель начала строки (на время dl_row)
 ; группа из 8 пикселей: по дворду на пиксель
 LX_A     equ 480                        ; альбедо
 LX_GX    equ 512
@@ -153,23 +156,37 @@ LX_SZ    equ 1088
     vpmullw ymm9, ymm9, ymm12           ; луна по нормали
     vpsrlw  ymm9, ymm9, 8
     vpaddw  ymm10, ymm10, ymm9
-    vpminsw ymm10, ymm10, [lx_w255]     ; L
-    ; альбедо · L
+    vpaddw  ymm10, ymm10, [rsi + rcx*8 + (dlb - albedo) + 32*%1]   ; огни (dl_row)
+    vpminsw ymm10, ymm10, [lx_wlmax]    ; L: свет до 1023, видимость до 255
+    ; альбедо · L / 128 — как в light_rows: (a << 7)·(L << 2) >> 16
     vmovdqa xmm0, [rsp + LX_A + 16*%1]
     vpmovzxbw ymm1, xmm0
-    vpmullw ymm2, ymm1, ymm10
-    vpsrlw  ymm2, ymm2, 7               ; X
+    vpsllw  ymm2, ymm1, 7
+    vpsllw  ymm3, ymm10, 2
+    vpmulhuw ymm2, ymm2, ymm3           ; X
     vpslld  xmm3, xmm0, 1
     vpsrad  xmm3, xmm3, 31              ; искра на снегу (бит 30) — вдвое
     LXBC    ymm3, xmm3
     vpand   ymm3, ymm3, ymm2
     vpaddw  ymm2, ymm2, ymm3
+    ; тоновая кривая: 16 слов -> два сбора по 8 двордов из tm_lut
+    vpminsw ymm2, ymm2, [lx_w2047]
+    vpmovzxwd ymm3, xmm2
+    vextracti128 xmm4, ymm2, 1
+    vpmovzxwd ymm4, xmm4
+    vpcmpeqd ymm5, ymm5, ymm5
+    vpgatherdd ymm6, [rsi + ymm3*4 + (tm_lut - albedo)], ymm5
+    vpcmpeqd ymm5, ymm5, ymm5
+    vpgatherdd ymm7, [rsi + ymm4*4 + (tm_lut - albedo)], ymm5
+    vpackusdw ymm2, ymm6, ymm7
+    vpermq  ymm2, ymm2, 0xD8
     ; позёмка: X += (летящий снег − X)·доля/64 (доля 0 — без изменений)
     cmp     dword [rsp + LX_DRF], 0
     je      %%nd
     vmovdqa xmm3, [rsp + LX_D + 16*%1]
     LXBC    ymm3, xmm3
-    vpmullw ymm4, ymm10, [lx_w190]      ; свет·190/64, не ярче 255
+    vpminsw ymm4, ymm10, [lx_w255]
+    vpmullw ymm4, ymm4, [lx_w190]       ; свет·190/64, не ярче 255
     vpsrlw  ymm4, ymm4, 6
     vpminsw ymm4, ymm4, [lx_w255]
     vpsubw  ymm4, ymm4, ymm2
@@ -276,6 +293,14 @@ light_rows_x:
     mov     eax, [moon_on]
     mov     [rsp + LX_MOON], eax
 .row:
+    ; свет огней строки — попиксельно, в dlb (lights.inc: SSE, тот же код, что у light_rows)
+    vzeroupper
+    mov     [rsp + LX_PIX], ecx
+    mov     ecx, CY0
+    sub     ecx, ebx
+    call    dl_row
+    mov     ecx, [rsp + LX_PIX]
+    mov     r8, [fbbits]
     vmovd   xmm0, ebx
     vpbroadcastd ymm0, xmm0
     vmovdqa [rsp + LX_ROWZ], ymm0
@@ -350,13 +375,13 @@ light_rows_x:
     vpaddd  ymm6, ymm6, ymm7            ; сэмпл
     vmovdqa [rsp + LX_SIDX], ymm6
     vpcmpeqd ymm7, ymm7, ymm7
-    vpgatherdd ymm10, [rsi + ymm6*4 + (lgrid - albedo)], ymm7
+    vpgatherdd ymm10, [rsi + ymm6*4 + (lgs - albedo)], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
-    vpgatherdd ymm11, [rsi + ymm6*4 + (lgrid - albedo) + 4], ymm7
+    vpgatherdd ymm11, [rsi + ymm6*4 + (lgs - albedo) + 4], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
-    vpgatherdd ymm12, [rsi + ymm6*4 + (lgrid - albedo) + GW*4], ymm7
+    vpgatherdd ymm12, [rsi + ymm6*4 + (lgs - albedo) + GW*4], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
-    vpgatherdd ymm13, [rsi + ymm6*4 + (lgrid - albedo) + GW*4 + 4], ymm7
+    vpgatherdd ymm13, [rsi + ymm6*4 + (lgs - albedo) + GW*4 + 4], ymm7
     vmovdqa [rsp + LX_S00], ymm10
     vmovdqa [rsp + LX_S01], ymm11
     vmovdqa [rsp + LX_S10], ymm12

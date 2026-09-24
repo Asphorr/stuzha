@@ -28,6 +28,7 @@ new_game:
     call    calc_hmap                   ; до света: фонари бросают тени по высотам
     call    wind_init                   ; погода на ночь, заслоны ветру — по карте высот
     call    calc_static_light
+    call    dl_bake                     ; огни попиксельно: точки, окна, карты горизонта
     call    calc_ao
     call    gen_drifts
     xor     eax, eax

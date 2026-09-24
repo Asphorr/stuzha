@@ -3,8 +3,8 @@ param([string]$n = "1", [int]$runs = 1, [switch]$fs, [string]$exe = "stuzha.exe"
 # кадрам (медиана устойчива к фону: виртуалка, браузер); fps — по медиане полного кадра.
 # Слоты: 0..7 проходы рендера, 8 — передача кадра потоку вывода, 9 — update,
 # 10 — поток вывода (надписи + окно, идёт параллельно), 11 — весь кадр, 12..19 — части
-$names = @{ 12 = "ntab+moon"; 1 = "lightgrid"; 2 = "floor"; 3 = "objects"; 4 = "roofs"; 0 = "wires+wait"; 18 = "(sky bg)"; 5 = "light";
-            14 = "  bloom"; 15 = "  cones"; 16 = "  parts"; 17 = "  flakes"; 6 = "  frost+hb"; 7 = "hud"; 8 = "handoff"; 9 = "update"; 10 = "(output bg)" }
+$names = @{ 12 = "ntab+moon"; 1 = "lightgrid+dl"; 2 = "floor"; 3 = "objects"; 4 = "roofs"; 0 = "wires+wait"; 18 = "(sky bg)"; 5 = "light+tiles";
+            14 = "  bloom"; 15 = "  beam+cones"; 16 = "  parts"; 17 = "  flakes"; 6 = "  frost+hb"; 7 = "hud"; 8 = "handoff"; 9 = "update"; 10 = "(output bg)" }
 $order = 12, 1, 2, 3, 4, 0, 18, 5, 14, 15, 16, 17, 6, -2, 7, 8, 9, 10
 $rows = [System.Collections.Generic.List[double[]]]::new()
 Push-Location $PSScriptRoot

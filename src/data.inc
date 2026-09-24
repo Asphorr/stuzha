@@ -982,15 +982,8 @@ tv_hue:     dd 0
 tv_pane:    dd 0x81FFE8D0
 breath_add: dd 0x00404040
 bb_lines:   dd 0
-; тени сущностей
+; заслонители фонарика
 nocc:       dd 0
-nsl:        dd 0
-sp_ux:      dd 0.0
-sp_uy:      dd 0.0
-sp_dz:      dd 0.0
-sp_tip:     dd 0.0
-sp_rdz:     dd 0.0
-sp_ir2:     dd 0.0
 ; спрайты
 img_sway:   dd 0
 img_mode:   dd 0
@@ -1107,14 +1100,6 @@ ra_u:       dd 0.0
 ra_t:       dd 0.0
 rq_occ:     dd 0
 rq_occn:    dd 0
-rq_l:       dd 0
-rl_n:       dd 0
-rl_wx:      dd 0.0
-rl_wy:      dd 0.0
-rl_wz:      dd 0.0
-rl_t:       dd 0.0
-align 16, db 0
-rl_lamps:   times 2*8 dd 0.0            ; x, y, z, 1/R², цвет B,G,R,0
 align 8, db 0
 rq_sh:      dq 0
 prof_now:   dq 0                        ; замеры проходов рендера
@@ -1424,7 +1409,6 @@ cl_tab:     resb 256
 cl_f:       resd 4096
 cl_g:       resd 4096
 occ:        resb MAXOCC*OC_SZ
-slist:      resq 64
 hflags:     resb MAPW*MAPW
 ; частицы и постобработка
 alignb 16

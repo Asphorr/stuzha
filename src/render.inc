@@ -26,7 +26,7 @@ render:
     PROF    12
     call    build_flash_occ
     call    compute_lightgrid
-    call    ent_shadows                 ; тени людей от фонарей и окон
+    call    dl_frame                    ; огни кадра по плиткам экрана (lights.inc)
     PROF    1
     call    floor_pass
     PROF    2
@@ -43,10 +43,16 @@ render:
     call    draw_wires
     call    par_wait
     PROF    0
+    ; плитки экрана: границы G-буфера в мире — огни, что не достают, долой (lights.inc)
+    lea     rcx, [dl_tiles]
+    mov     edx, DT_H
+    mov     r8d, 2
+    call    par_for
     call    light_pass
     PROF    5
     call    bloom_pass
     PROF    14
+    call    beam_pass                   ; луч фонарика в снегу (lights.inc)
     call    draw_cones
     PROF    15
     call    draw_parts
@@ -151,9 +157,13 @@ compute_lightgrid:
     add     rsp, 40
     ret
 
-; строки сетки ecx .. edx−1 (с любого потока пула; своё — только на стеке)
-LG_ST equ 32                            ; [rsp + LG_ST]: небо, огни и окна сэмпла
-LG_END equ 48                           ; конец диапазона
+; строки сетки ecx .. edx−1 (с любого потока пула; своё — только на стеке).
+; Три сетки: lgs — поверхностям (небо·AO, аура, видимость: огни они считают сами,
+; попиксельно), lgst — свет огней и фонарика на снегу (отсвет снизу), lgrid — всё
+; вместе, частицам и снежинкам в воздухе
+LG_ST equ 32                            ; [rsp + LG_ST]: огни, окна, фонарик у сэмпла
+LG_A equ 48                             ; небо·AO
+LG_END equ 64                           ; конец диапазона
 lg_rows:
     push    rbx
     push    rsi
@@ -163,7 +173,7 @@ lg_rows:
     push    r14
     push    r15
     push    rbp
-    sub     rsp, 56
+    sub     rsp, 88
     mov     [rsp + LG_END], edx
     mov     r14d, ecx                   ; j
     imul    eax, ecx, GW*4
@@ -234,8 +244,9 @@ lg_rows:
     mulss   xmm1, [f_inv255]
     shufps  xmm1, xmm1, 0
     mulps   xmm1, [amb_vec]
-    addps   xmm0, xmm1
-    ; видимое игроком (фонарик, аура, обзор) копится отдельно — в lgv, сгладится после
+    movaps  [rsp + LG_A], xmm1
+    ; видимое игроком (аура, обзор) копится отдельно — в lgv, сгладится после;
+    ; фонарик на снегу — к огням сэмпла (поверхностям он светит попиксельно)
     movaps  [rsp + LG_ST], xmm0
     xorps   xmm0, xmm0
     shl     eax, 6
@@ -378,7 +389,8 @@ lg_rows:
     mulss   xmm7, xmm6
     shufps  xmm7, xmm7, 0
     mulps   xmm7, [flash_col]
-    addps   xmm0, xmm7
+    addps   xmm7, [rsp + LG_ST]
+    movaps  [rsp + LG_ST], xmm7
 .noflash:
     ; слабая аура вокруг игрока
     movss   xmm7, [f_1]
@@ -402,14 +414,12 @@ lg_rows:
     packssdw xmm0, xmm0
     packuswb xmm0, xmm0
     movd    [rdi + (lgv - lgrid)], xmm0
-    movaps  xmm0, [rsp + LG_ST]
     jmp     .store
 .novis:
     imul    eax, r14d, GW
     add     eax, r15d
     lea     rcx, [losg]
     mov     byte [rcx + rax], 0
-    movaps  xmm0, [rsp + LG_ST]
 .nov2:
     lea     rcx, [vgrid]
     mov     byte [rcx + rax], 0
@@ -417,16 +427,30 @@ lg_rows:
     jmp     .store
 .dark:
     xorps   xmm0, xmm0
+    movaps  [rsp + LG_ST], xmm0
+    movaps  [rsp + LG_A], xmm0
     imul    eax, r14d, GW
     add     eax, r15d
     lea     rcx, [losg]
     mov     byte [rcx + rax], 0
     jmp     .nov2
 .store:
+    movaps  xmm0, [rsp + LG_ST]
+    movaps  xmm1, [rsp + LG_A]
+    movaps  xmm2, xmm0
+    addps   xmm2, xmm1
     cvtps2dq xmm0, xmm0
     packssdw xmm0, xmm0
     packuswb xmm0, xmm0
-    movd    [rdi], xmm0
+    movd    [rdi + (lgst - lgrid)], xmm0
+    cvtps2dq xmm1, xmm1
+    packssdw xmm1, xmm1
+    packuswb xmm1, xmm1
+    movd    [rdi + (lgs - lgrid)], xmm1
+    cvtps2dq xmm2, xmm2
+    packssdw xmm2, xmm2
+    packuswb xmm2, xmm2
+    movd    [rdi], xmm2
     add     rdi, 4
     inc     r15d
     cmp     r15d, GW
@@ -434,7 +458,7 @@ lg_rows:
     inc     r14d
     cmp     r14d, [rsp + LG_END]
     jb      .row
-    add     rsp, 56
+    add     rsp, 88
     pop     rbp
     pop     r15
     pop     r14
@@ -481,11 +505,15 @@ lg_soften:
     dec     r9d
     jnz     .pass
     lea     rdi, [lgrid]
+    lea     rdx, [lgs]
     xor     ecx, ecx
 .a:
+    movdqa  xmm1, [rsi + rcx]
     movdqa  xmm0, [rdi + rcx]
-    paddusb xmm0, [rsi + rcx]
+    paddusb xmm0, xmm1
     movdqa  [rdi + rcx], xmm0
+    paddusb xmm1, [rdx + rcx]
+    movdqa  [rdx + rcx], xmm1
     add     ecx, 16
     cmp     ecx, GW*GW*4
     jb      .a
@@ -2654,13 +2682,21 @@ light_rows:
     push    r14
     push    r15
     push    rbp
-    sub     rsp, 8
+    sub     rsp, 56
     imul    eax, edx, SCR_W
     mov     [rsp], eax                  ; конец диапазона, пиксель
     mov     ebx, CY0                    ; CY0 − строка
     sub     ebx, ecx
     imul    ecx, ecx, SCR_W
     lea     rsi, [albedo]
+    mov     ebp, [grain_off]
+.row:
+    ; свет огней этой строки — попиксельно, в dlb (lights.inc; портит xmm и r8–r11)
+    mov     [rsp + 8], ecx
+    mov     ecx, CY0
+    sub     ecx, ebx
+    call    dl_row
+    mov     ecx, [rsp + 8]
     mov     r8, [fbbits]
     mov     r9d, [camx]
     add     r9d, [camy]
@@ -2668,13 +2704,11 @@ light_rows:
     shl     r10d, 6
     mov     r11d, [goy]
     shl     r11d, 6
-    mov     ebp, [grain_off]
     pxor    xmm15, xmm15
     movdqa  xmm14, [tint_vec]
     movdqa  xmm13, [memtint_v]          ; в мгле «память» светлее
     movdqa  xmm12, [w255]
     movdqa  xmm11, [gray_w]
-.row:
     mov     edi, SCR_W
 .px:
     mov     eax, [rsi + rcx*4]
@@ -2777,8 +2811,8 @@ light_rows:
     movzx   r12d, byte [rsi + rcx + (nbuf - albedo)]
     test    r12d, NOWN
     jnz     .own
-    movq    xmm0, [rsi + r13*4 + (lgrid - albedo)]
-    movq    xmm1, [rsi + r13*4 + (lgrid - albedo) + GW*4]
+    movq    xmm0, [rsi + r13*4 + (lgs - albedo)]
+    movq    xmm1, [rsi + r13*4 + (lgs - albedo) + GW*4]
     punpcklbw xmm0, xmm15
     punpcklbw xmm1, xmm15
     pmullw  xmm0, xmm2
@@ -2813,15 +2847,35 @@ light_rows:
     pmullw  xmm1, xmm7
     psrlw   xmm1, 8
     paddw   xmm0, xmm1
-    pminsw  xmm0, xmm12
 .lit:
+    ; огни — попиксельно (dl_row); свет до 1023, видимость — до 255
+    movq    xmm1, [rsi + rcx*8 + (dlb - albedo)]
+    paddw   xmm0, xmm1
+    pminsw  xmm0, [w_lmax]
+    ; альбедо·L/128: (a << 7)·(L << 2) >> 16 — без переполнения слова
     punpcklbw xmm4, xmm15
-    pmullw  xmm4, xmm0
-    psrlw   xmm4, 7
+    psllw   xmm4, 7
+    movdqa  xmm1, xmm0
+    psllw   xmm1, 2
+    pmulhuw xmm4, xmm1
     test    dword [rsi + rcx*4], 0x40000000
     jz      .nospark
     paddw   xmm4, xmm4                  ; искра на снегу
 .nospark:
+    ; тоновая кривая: пересвет плавно к 255
+    pminsw  xmm4, [w_2047]
+    pextrw  eax, xmm4, 0
+    mov     eax, [rsi + rax*4 + (tm_lut - albedo)]
+    pinsrw  xmm4, eax, 0
+    pextrw  eax, xmm4, 1
+    mov     eax, [rsi + rax*4 + (tm_lut - albedo)]
+    pinsrw  xmm4, eax, 1
+    pextrw  eax, xmm4, 2
+    mov     eax, [rsi + rax*4 + (tm_lut - albedo)]
+    pinsrw  xmm4, eax, 2
+    pextrw  eax, xmm4, 3
+    mov     eax, [rsi + rax*4 + (tm_lut - albedo)]
+    pinsrw  xmm4, eax, 3
     ; ----- позёмка: у самой земли (z < 12 px) там, где метёт, — змейки снега по ветру;
     ; прячут следы и искры, заметают ноги и низ стен. Маска — сетка ветра (билинейно),
     ; полосы — два слоя текстуры в осях ветра, бегут с разной скоростью
@@ -2912,6 +2966,7 @@ light_rows:
     jz      .nodr
     ; цвет летящего снега: свет·190/64 — светлее лежащего (без самозатенения), не ярче 255
     movdqa  xmm7, xmm0
+    pminsw  xmm7, xmm12
     pmullw  xmm7, [w_drift]
     psrlw   xmm7, 6
     pminsw  xmm7, xmm12
@@ -2976,7 +3031,7 @@ light_rows:
     mov     dword [r8 + rcx*4], 0
     jmp     .next
 .out:
-    add     rsp, 8
+    add     rsp, 56
     pop     rbp
     pop     r15
     pop     r14

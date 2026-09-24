@@ -532,29 +532,7 @@ rq_fill:
     mov     ecx, [rq_n]
     and     ecx, 0x3F
     mov     [rq_n], ecx
-    mov     edx, [rbp + rcx*4 + (amb_n - albedo)]
-    cmp     dword [rl_n], 0
-    je      .nol
-    ; фонари рядом — натрий на снегу крыши
-    mov     [rq_l], edx
-    movaps  xmm0, xmm6
-    addss   xmm0, xmm7
-    mulss   xmm0, xmm12
-    addss   xmm0, xmm10
-    movaps  xmm1, xmm6
-    subss   xmm1, xmm7
-    mulss   xmm1, xmm12
-    addss   xmm1, xmm11
-    movaps  xmm2, xmm6
-    subss   xmm2, xmm9
-    mulss   xmm2, xmm13
-    call    rq_lamps
-    movd    xmm0, eax
-    movd    xmm1, [rq_l]
-    paddusb xmm0, xmm1
-    movd    edx, xmm0
-    mov     ecx, [rq_n]
-.nol:
+    mov     edx, [rbp + rcx*4 + (amb_n - albedo)]   ; небо (фонари — попиксельно, lights.inc)
     or      edx, [rq_vis]
     mov     [rbp + r15*4 + (lbuf - albedo)], edx
     or      ecx, NOWN
@@ -579,70 +557,6 @@ rq_fill:
     pop     rdi
     pop     rsi
     pop     rbx
-    ret
-
-; xmm0 = wx, xmm1 = wy (8.8), xmm2 = z (px), [rq_n] = нормаль -> eax = свет фонарей рядом
-; с домом (B,G,R): затухание (1 − d²/R²)², N·L с мягкой обёрткой. Портит rax, rcx, rdx, xmm0–5
-rq_lamps:
-    movss   [rl_wx], xmm0
-    movss   [rl_wy], xmm1
-    movss   [rl_wz], xmm2
-    mov     ecx, [rq_n]
-    shl     ecx, 4
-    lea     rdx, [nvec]
-    add     rdx, rcx
-    xorps   xmm5, xmm5
-    lea     rax, [rl_lamps]
-    mov     ecx, [rl_n]
-.l:
-    movss   xmm0, [rax]
-    subss   xmm0, [rl_wx]
-    mulss   xmm0, [f_pxu]               ; до фонаря, px
-    movss   xmm1, [rax + 4]
-    subss   xmm1, [rl_wy]
-    mulss   xmm1, [f_pxu]
-    movss   xmm2, [rax + 8]
-    subss   xmm2, [rl_wz]
-    movaps  xmm3, xmm0
-    mulss   xmm3, xmm0
-    movaps  xmm4, xmm1
-    mulss   xmm4, xmm1
-    addss   xmm3, xmm4
-    movaps  xmm4, xmm2
-    mulss   xmm4, xmm2
-    addss   xmm3, xmm4                  ; d²
-    movaps  xmm4, xmm3
-    mulss   xmm4, [rax + 12]
-    movss   [rl_t], xmm4
-    movss   xmm4, [f_1]
-    subss   xmm4, [rl_t]
-    comiss  xmm4, [f_0]
-    jbe     .n
-    mulss   xmm4, xmm4
-    movss   [rl_t], xmm4
-    mulss   xmm0, [rdx]
-    mulss   xmm1, [rdx + 4]
-    mulss   xmm2, [rdx + 8]
-    addss   xmm0, xmm1
-    addss   xmm0, xmm2
-    rsqrtss xmm3, xmm3
-    mulss   xmm0, xmm3                  ; cos
-    addss   xmm0, [f_0_25]
-    mulss   xmm0, [f_0_8]
-    maxss   xmm0, [f_0]
-    mulss   xmm0, [rl_t]
-    shufps  xmm0, xmm0, 0
-    movups  xmm1, [rax + 16]
-    mulps   xmm0, xmm1
-    addps   xmm5, xmm0
-.n:
-    add     rax, 32
-    dec     ecx
-    jnz     .l
-    cvtps2dq xmm5, xmm5
-    packssdw xmm5, xmm5
-    packuswb xmm5, xmm5
-    movd    eax, xmm5
     ret
 
 ; отрезок в осях дома (la_u0.., la_u1..) толщиной в пиксель, с тестом глубины и проявкой;
@@ -987,72 +901,6 @@ roof_setup:
 .vd:
     shl     r9d, 24
     mov     [rq_vis], r9d
-    ; до двух уличных фонарей, до которых свет дотягивается
-    mov     dword [rl_n], 0
-    lea     rsi, [lights]
-    mov     edi, [nlights]
-    lea     r10, [rl_lamps]
-.lp:
-    test    edi, edi
-    jz      .lpd
-    mov     eax, [rsi + L_KIND]
-    lea     r11, [lampf_vec]
-    cmp     eax, LK_LAMP
-    je      .lk
-    lea     r11, [lampb_vec]
-    cmp     eax, LK_BROKEN
-    jne     .lpn
-.lk:
-    cvtsi2ss xmm0, dword [rbx + HS_X0]
-    subss   xmm0, [rsi + L_X]
-    cvtsi2ss xmm2, dword [rbx + HS_W]
-    movaps  xmm1, xmm0
-    addss   xmm1, xmm2
-    xorps   xmm1, [f_signmask]
-    maxss   xmm0, xmm1
-    maxss   xmm0, [f_0]                 ; до сруба по x
-    cvtsi2ss xmm3, dword [rbx + HS_Y0]
-    subss   xmm3, [rsi + L_Y]
-    cvtsi2ss xmm2, dword [rbx + HS_H]
-    movaps  xmm1, xmm3
-    addss   xmm1, xmm2
-    xorps   xmm1, [f_signmask]
-    maxss   xmm3, xmm1
-    maxss   xmm3, [f_0]
-    mulss   xmm0, xmm0
-    mulss   xmm3, xmm3
-    addss   xmm0, xmm3
-    movss   xmm1, [rsi + L_R]
-    mulss   xmm1, [f_0_6]               ; дальше свет на крыше — меньше процента
-    mulss   xmm1, xmm1
-    comiss  xmm0, xmm1
-    jae     .lpn
-    movss   xmm0, [rsi + L_X]
-    mulss   xmm0, [f_256]
-    movss   [r10], xmm0
-    movss   xmm0, [rsi + L_Y]
-    mulss   xmm0, [f_256]
-    movss   [r10 + 4], xmm0
-    mov     dword [r10 + 8], __float32__(39.0)  ; голова фонаря, px
-    movss   xmm0, [rsi + L_R]
-    mulss   xmm0, [f_19_6]
-    mulss   xmm0, xmm0
-    movss   xmm1, [f_1]
-    divss   xmm1, xmm0
-    movss   [r10 + 12], xmm1
-    movups  xmm0, [rsi + L_COL]
-    movups  xmm1, [r11]
-    mulps   xmm0, xmm1                  ; натрий греется / фонарь мигает
-    movups  [r10 + 16], xmm0
-    add     r10, 32
-    inc     dword [rl_n]
-    cmp     dword [rl_n], 2
-    jae     .lpd
-.lpn:
-    add     rsi, L_SZ
-    dec     edi
-    jmp     .lp
-.lpd:
     pop     rdi
     pop     rsi
     ret

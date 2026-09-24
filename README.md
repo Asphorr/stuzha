@@ -23,22 +23,31 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~26k lines of hand-written NASM. The game is a single 230 KB executable.
+~29k lines of hand-written NASM. The game is a single 250 KB executable.
 
 **What's inside**
 
 - **Software renderer.** 640×360, scaled to the window. It uses a G-buffer
-  (albedo, normals, world position) with deferred lighting on SSE2: moonlight
-  with contact-hardening soft shadows from a height map, sodium street lamps
-  and lit windows baked with ray-cast shadows, and a flashlight. It also has a
-  view cone that greys out what you cannot see, bloom and a frost overlay.
+  (albedo, normals, world position) with deferred lighting on SSE2. The moon
+  casts contact-hardening soft shadows from a height map. There is also a view
+  cone that greys out what you cannot see, bloom and a frost overlay.
+- **Per-pixel light.** Street lamps, lit windows, the stove and the TV are
+  computed for every pixel: 3D falloff, soft N·L, and shadows from each light's
+  horizon map with a penumbra that widens away from the fence or wall casting
+  it. People and zombies cast shadows too. A window throws its frame, curtains
+  and whatever sits on the sill onto the snow, sharp by the wall and blurrier
+  farther out. The flashlight is a spotlight with a hot centre and a reflector
+  ring, zombies block it, and in a blizzard you see the beam in the air. Lit
+  snow bounces warm light onto walls and figures from below and glints under
+  the lamps, and highlights roll off smoothly instead of clipping to white.
+  The screen is split into 16×16 tiles, and each tile only evaluates the
+  lights that reach it.
 - **Fast on every core.** Per-row passes run on a small thread pool, the moon
   shadow sweep runs in the background while objects are drawn, and HUD text and
   presenting happen on their own output thread. The lighting pass has an AVX2
   path (8 pixels per step) next to the SSE2 one. Every path produces the same
   frame down to the byte, which is checked against the single-threaded SSE2
-  build. On an i7-7700 a frame takes about 3–4 ms, up from about 12 ms
-  single-threaded.
+  build. On an i7-7700 a frame takes about 5.5 ms (around 180 fps).
 - **The world.** Gabled snow roofs are rasterized in world planes with
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
@@ -104,20 +113,29 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~26 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 230 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~29 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 250 КБ.
 
 **Что внутри**
 
 - **Софтверный рендер.** 640×360 с масштабом под окно. Это G-буфер (цвет,
-  нормали, мировые координаты) и отложенное освещение на SSE2: луна с мягкими
-  тенями по карте высот, натриевые фонари и окна с запечёнными тенями, фонарик.
-  Ещё там конус обзора (невидимое — серой памятью), блум и иней по краям экрана.
+  нормали, мировые координаты) и отложенное освещение на SSE2. Луна даёт мягкие
+  тени по карте высот. Ещё там конус обзора (невидимое — серой памятью), блум и
+  иней по краям экрана.
+- **Свет попиксельно.** Фонари, окна, печь и телевизор считаются на каждый
+  пиксель: затухание в 3D, мягкое N·L и тени по карте горизонта каждого огня,
+  с полутенью, что растёт от забора или стены. Люди и зомби тоже отбрасывают
+  тени. Окно кладёт на снег свою раму, шторы и то, что стоит на подоконнике: у
+  стены резко, дальше размыто. Фонарик — прожектор с горячей серединой и
+  кольцом рефлектора, зомби его заслоняют, а в метель луч виден в воздухе.
+  Освещённый снег подсвечивает стены и фигуры снизу и искрится под фонарями,
+  а пересвет плавно уходит в насыщение, а не в белое пятно. Экран поделён на
+  плитки 16×16, и каждая считает только те огни, что до неё достают.
 - **На всех ядрах.** Построчные проходы идут на пуле потоков, тени луны
   считаются фоном, пока рисуются объекты, надписи и вывод в окно — в своём
   потоке. У освещения есть путь на AVX2 (8 пикселей за шаг) рядом с SSE2. Все
   пути дают один и тот же кадр до байта, это сверяется с однопоточной SSE2-сборкой.
-  На i7-7700 кадр занимает около 3–4 мс (было около 12 мс в одном потоке).
+  На i7-7700 кадр занимает около 5,5 мс (около 180 fps).
 - **Мир.** Двускатные крыши в снегу растеризуются в мировых плоскостях с
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют

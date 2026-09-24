@@ -38,6 +38,7 @@ start:
     mov     [rng], eax
     call    init_tables
     call    init_blk_lut
+    call    dl_init                     ; тоновая кривая, маски рам окон
     call    gen_clouds
     call    gen_gust                    ; шум порывов, полосы позёмки, иней — своим ГСЧ,
     call    gen_streaks                 ; село от них не меняется
@@ -1786,6 +1787,7 @@ draw_text:
 %include "snow.inc"
 %include "post.inc"
 %include "lightx.inc"
+%include "lights.inc"
 %include "pool.inc"
 %include "audio.inc"
 %include "data.inc"

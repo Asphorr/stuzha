@@ -500,14 +500,21 @@ get_tile:
 .no:
     ret
 
-; xmm0 = x, xmm1 = y, xmm2 = радиус, rdx -> цвет (4 x f32)
+; xmm0 = x, xmm1 = y, xmm2 = радиус, rdx -> цвет (4 x f32) -> rax = запись (0 — полно)
 add_light:
     mov     eax, [nlights]
     cmp     eax, MAXL
     jae     .full
-    shl     eax, 5
+    imul    eax, eax, L_SZ
     lea     r11, [lights]
     add     r11, rax
+    xorps   xmm3, xmm3
+    mov     eax, 32
+.z:
+    movups  [r11 + rax], xmm3           ; поля света попиксельно — с нуля
+    add     eax, 16
+    cmp     eax, L_SZ
+    jb      .z
     movss   [r11 + L_X], xmm0
     movss   [r11 + L_Y], xmm1
     movss   [r11 + L_R], xmm2
@@ -516,7 +523,10 @@ add_light:
     movups  xmm3, [rdx]
     movups  [r11 + L_COL], xmm3
     inc     dword [nlights]
+    mov     rax, r11
+    ret
 .full:
+    xor     eax, eax
     ret
 
 gen_map:
@@ -711,6 +721,12 @@ try_window:
     lea     rdx, [col_window]
     mov     dword [nl_kind], LK_WIN
     call    add_light
+    test    rax, rax
+    jz      .out
+    mov     [rax + L_TX], ebx           ; для света сквозь раму: тайл и куда наружу
+    mov     [rax + L_TY], esi
+    mov     [rax + L_DX], r12d
+    mov     [rax + L_DY], r13d
 .out:
     add     rsp, 32
     pop     r13
@@ -1067,7 +1083,25 @@ make_lot:
     lea     rdx, [col_tv]
     mov     dword [nl_kind], LK_TV
     call    add_light
+    test    rax, rax
+    jz      .room
+    mov     [rax + L_TX], edi
+    mov     [rax + L_TY], ebp
 .room:
+    ; огонь в топке (дверца — на грани +y печи)
+    cvtsi2ss xmm0, ebx
+    addss   xmm0, [f_0_5]
+    cvtsi2ss xmm1, esi
+    addss   xmm1, [f_1]
+    movss   xmm2, [f_3_2]
+    lea     rdx, [col_fire]
+    mov     dword [nl_kind], LK_STOVE
+    call    add_light
+    test    rax, rax
+    jz      .room2
+    mov     [rax + L_TX], ebx
+    mov     [rax + L_TY], esi
+.room2:
     mov     dword [nl_kind], LK_ROOM
     cvtsi2ss xmm0, dword [H_w]
     mulss   xmm0, [f_0_5]
@@ -1940,6 +1974,8 @@ calc_static_light:
     ; свой буфер по виду: окна и комнаты, фонари, сломанный, телевизоры
     lea     rbx, [slight]
     mov     eax, [r12 + L_KIND]
+    cmp     eax, LK_STOVE
+    je      .Lnext                      ; топка светит только попиксельно
     cmp     eax, LK_LAMP
     jne     .k1
     lea     rbx, [slightL]
