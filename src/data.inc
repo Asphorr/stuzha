@@ -485,6 +485,8 @@ ger_leaf:   db 0, 0, 0x1C, 0x08, 0x08
 ger_flow:   db 0, 0, 0, 0x10, 0x10
 well_spots: db 41, 56, 87, 66, 33, 68, 95, 55, 64, 40, 60, 86, 0xFF
 logshade: db 120, 200, 245, 255, 225, 160
+lognrm:   db N_LYU+1, N_LYU+1, N_FY, N_FY, N_LYU, N_LYU, 0, 0             ; нормаль ряда бревна, грань +y
+          db N_LXU+1, N_LXU+1, N_FX, N_FX, N_LXU, N_LXU, 0, 0             ; грань +x
 ; нормали (x, y, вверх) x100, нормируются при старте
 align 2, db 0
 nraw:
@@ -1382,6 +1384,9 @@ spr_lamp:   resd 12*50
 spr_cross:  resd 10*20
 dlist:      resq 304
 logtab:     resb 64
+alignb 4
+lut_log:    resd 257                    ; оттенки бревна и торца (init_blk_lut)
+lut_logend: resd 257
 ; свет и тени
 alignb 64
 slightL:    resd SLW*SLW                ; уличные фонари

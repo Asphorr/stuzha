@@ -1443,8 +1443,105 @@ draw_block:
 .s0:
     mov     edi, r14d
     cmp     edi, SCR_H
-    jle     .sl
+    jle     .s1
     mov     edi, SCR_H
+.s1:
+    ; колонка из одних брёвен (стена, срезанная стена, окно не в этой колонке) — быстрый
+    ; путь: то же, что shade_side.logs, без вызова и развилок по виду, оттенок — из
+    ; таблицы; сугроб внизу колонки дорисует общий цикл
+    mov     eax, [bk_kind]
+    cmp     eax, D_WALL
+    je      .flog
+    cmp     eax, D_WINL
+    ja      .sl
+    cmp     dword [bk_cut], 0
+    jne     .flog
+    lea     eax, [rbp - 2]
+    sub     eax, r15d                   ; окно и подоконник — в u − 2 − грань = 0..10
+    cmp     eax, 10
+    jbe     .sl
+.flog:
+    lea     r9, [lut_log]               ; торец бревна — на краю грани
+    test    r15d, r15d
+    jnz     .fq1
+    test    ebp, ebp
+    jnz     .fq2
+    lea     r9, [lut_logend]
+    jmp     .fq2
+.fq1:
+    cmp     ebp, 15
+    jne     .fq2
+    lea     r9, [lut_logend]
+.fq2:
+    imul    r8d, ebp, 3
+    add     r8d, [bk_seed]              ; соль снега в пазу: u·3 + seed
+.fpx:
+    cmp     esi, edi
+    jge     .nextcol
+    mov     edx, r14d
+    dec     edx
+    sub     edx, esi                    ; h
+    cmp     edx, [col_dh]
+    jb      .sl                         ; дальше вниз — сугроб
+    lea     rax, [logtab]
+    movzx   eax, byte [rax + rdx]
+    mov     r10d, eax
+    and     r10d, 15                    ; ряд в бревне
+    shr     eax, 4                      ; бревно
+    test    r10d, r10d
+    jnz     .fp2
+    mov     ecx, r8d
+    HASH    ecx, eax
+    test    ecx, 3
+    jnz     .fp2
+    mov     eax, 0x01D8DEE6             ; снег лежит в пазу — смотрит в небо
+    mov     ecx, N_UP
+    jmp     .fput
+.fp2:
+    mov     r11d, ebp
+    add     r11d, [bk_seed]
+    mov     ecx, edx
+    HASH    r11d, ecx
+    and     r11d, 15
+    lea     rax, [logshade]
+    movzx   ecx, byte [rax + r10]
+    sub     ecx, r11d
+    mov     eax, edx                    ; у самого снега темнее — контактная тень
+    sub     eax, [col_dh]
+    cmp     eax, 8
+    jae     .fp5
+    imul    eax, eax, 10
+    add     eax, 176
+    imul    ecx, eax
+    shr     ecx, 8
+.fp5:
+    cmp     dword [bk_cut], 0           ; верхние венцы — в тени свеса крыши
+    jne     .fp6
+    mov     eax, [bk_H]
+    sub     eax, edx
+    cmp     eax, 5
+    ja      .fp6
+    imul    eax, eax, 24
+    add     eax, 136
+    imul    ecx, eax
+    shr     ecx, 8
+.fp6:
+    mov     eax, [r9 + rcx*4]
+    lea     rcx, [lognrm]
+    lea     rcx, [rcx + r15*8]
+    movzx   ecx, byte [rcx + r10]
+.fput:
+    imul    r11d, esi, SCR_W
+    add     r11d, ebx
+    lea     rdx, [albedo]
+    mov     [rdx + r11*4], eax
+    mov     eax, [col_gpos]
+    lea     rdx, [gposb]
+    mov     [rdx + r11*4], eax
+    lea     rdx, [nbuf]
+    mov     [rdx + r11], cl
+    inc     esi
+    jmp     .fpx
 .sl:
     cmp     esi, edi
     jge     .nextcol
@@ -1483,6 +1580,23 @@ draw_block:
     pop     rdi
     pop     rsi
     pop     rbx
+    ret
+
+; оттенки брёвен для быстрого пути draw_block: shade_col(c_log / c_logend, f), f = 0..256
+init_blk_lut:
+    xor     ecx, ecx
+.l:
+    lea     rdx, [c_log]
+    call    shade_col
+    lea     r8, [lut_log]
+    mov     [r8 + rcx*4], eax
+    lea     rdx, [c_logend]
+    call    shade_col
+    lea     r8, [lut_logend]
+    mov     [r8 + rcx*4], eax
+    inc     ecx
+    cmp     ecx, 256
+    jbe     .l
     ret
 
 ; rdx -> 4 слова (B,G,R,0), ecx = множитель 0..256 -> eax

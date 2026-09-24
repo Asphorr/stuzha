@@ -36,6 +36,7 @@ start:
 .seed:
     mov     [rng], eax
     call    init_tables
+    call    init_blk_lut
     call    gen_clouds
     call    gen_gust                    ; шум порывов, полосы позёмки, иней — своим ГСЧ,
     call    gen_streaks                 ; село от них не меняется
@@ -425,8 +426,8 @@ run_shot:
 ; кадров update + render + present без DwmFlush; каждый проход каждого кадра ->
 ; bench.bin (NBENCH, BSLOTS, частота QPC, затем тики), разбор — build\bench.ps1
 NBENCH equ 600
-BSLOTS equ 20                           ; 0..7 — проходы рендера, 8 — передача кадра, 9 — update,
-                                        ; 10 — поток вывода, 11 — весь кадр, 12..19 — части проходов
+BSLOTS equ 24                           ; 0..7 — проходы рендера, 8 — передача кадра, 9 — update,
+                                        ; 10 — поток вывода, 11 — весь кадр, 12..23 — части проходов
 bench_run:
     call    create_window
     mov     dword [pr_nodwm], 1         ; поток вывода не ждёт экран

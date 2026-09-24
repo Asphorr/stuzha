@@ -17,8 +17,7 @@ for ($r = 0; $r -lt $runs; $r++) {
   $cnt = [BitConverter]::ToInt32($d, 0); $ns = [BitConverter]::ToInt32($d, 4); $q = [BitConverter]::ToInt64($d, 8)
   for ($f = $skip; $f -lt $cnt; $f++) {
     $row = [double[]]::new(26)
-    for ($i = 0; $i -lt $ns; $i++) { $row[$i] = [BitConverter]::ToInt64($d, 16 + ($f * $ns + $i) * 8) * 1000.0 / $q }
-    $row[21] = $row[6] + $row[14] + $row[15] + $row[16] + $row[17]              # post
+    for ($i = 0; $i -lt $ns; $i++) { $row[$i] = [BitConverter]::ToInt64($d, 16 + ($f * $ns + $i) * 8) * 1000.0 / $q }    $row[21] = $row[6] + $row[14] + $row[15] + $row[16] + $row[17]              # post
     $row[22] = 0; foreach ($i in 0..7 + 12..17) { $row[22] += $row[$i] }        # render (без фоновых)
     $row[23] = $row[11]                                                         # frame
     $rows.Add($row)
