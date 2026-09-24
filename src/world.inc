@@ -1508,6 +1508,122 @@ build_opq:
     jb      .l
     ret
 
+; opq_df: чебышёвское расстояние до ближайшего непрозрачного тайла opq (0 — сам
+; непрозрачный), не больше 60 — по нему los_ray перешагивает открытое. Два прохода
+; (прямой и обратный) с 8 соседями дают точное расстояние
+build_opq_df:
+    push    rbx
+    ; ⌈2^32 / n⌉ для шагов луча, n = 1..LOSN−1
+    mov     ecx, 1
+.rc:
+    mov     rax, 1 << 32
+    lea     rax, [rax + rcx - 1]
+    xor     edx, edx
+    div     rcx
+    lea     rdx, [los_rcp]
+    mov     [rdx + rcx*8], rax
+    inc     ecx
+    cmp     ecx, LOSN
+    jb      .rc
+    lea     r8, [opq]
+    lea     r9, [opq_df]
+    xor     ecx, ecx
+.i:
+    cmp     byte [r8 + rcx], 0
+    mov     eax, 60
+    mov     edx, 0
+    cmovne  eax, edx
+    mov     [r9 + rcx], al
+    inc     ecx
+    cmp     ecx, MAPW*MAPW
+    jb      .i
+    ; прямой: соседи (x−1, y), (x−1, y−1), (x, y−1), (x+1, y−1)
+    xor     r10d, r10d                  ; y
+.fy:
+    xor     r11d, r11d                  ; x
+.fx:
+    mov     ecx, r10d
+    shl     ecx, 7
+    add     ecx, r11d
+    movzx   eax, byte [r9 + rcx]
+    test    r11d, r11d
+    jz      .f1
+    movzx   edx, byte [r9 + rcx - 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.f1:
+    test    r10d, r10d
+    jz      .f4
+    movzx   edx, byte [r9 + rcx - MAPW]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+    test    r11d, r11d
+    jz      .f3
+    movzx   edx, byte [r9 + rcx - MAPW - 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.f3:
+    cmp     r11d, MAPW-1
+    je      .f4
+    movzx   edx, byte [r9 + rcx - MAPW + 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.f4:
+    mov     [r9 + rcx], al
+    inc     r11d
+    cmp     r11d, MAPW
+    jb      .fx
+    inc     r10d
+    cmp     r10d, MAPW
+    jb      .fy
+    ; обратный: соседи (x+1, y), (x+1, y+1), (x, y+1), (x−1, y+1)
+    mov     r10d, MAPW-1
+.by:
+    mov     r11d, MAPW-1
+.bx:
+    mov     ecx, r10d
+    shl     ecx, 7
+    add     ecx, r11d
+    movzx   eax, byte [r9 + rcx]
+    cmp     r11d, MAPW-1
+    je      .b1
+    movzx   edx, byte [r9 + rcx + 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.b1:
+    cmp     r10d, MAPW-1
+    je      .b4
+    movzx   edx, byte [r9 + rcx + MAPW]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+    cmp     r11d, MAPW-1
+    je      .b3
+    movzx   edx, byte [r9 + rcx + MAPW + 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.b3:
+    test    r11d, r11d
+    jz      .b4
+    movzx   edx, byte [r9 + rcx + MAPW - 1]
+    inc     edx
+    cmp     edx, eax
+    cmovb   eax, edx
+.b4:
+    mov     [r9 + rcx], al
+    dec     r11d
+    jns     .bx
+    dec     r10d
+    jns     .by
+    pop     rbx
+    ret
+
 ; ---------------------------------------------------------------- луч видимости
 ; ecx,edx = откуда, r8d,r9d = куда (мир 8.8) -> eax = 1, если не заслонено
 ; тайл-цель сам себя не заслоняет (грани стен освещаются снаружи)
@@ -1539,19 +1655,85 @@ los_ray:
     test    eax, eax
     jz      .clear
     mov     ecx, eax
+    ; шаг = (d << 8) / n к нулю — умножением на ⌈2^32/n⌉: при |d << 8|·n < 2^32
+    ; (здесь всегда) частное то же, что у idiv
+    lea     r11, [los_rcp]
+    mov     r11, [r11 + rcx*8]
     mov     eax, r8d
     shl     eax, 8
     cdq
-    idiv    ecx
+    xor     eax, edx
+    sub     eax, edx
+    imul    rax, r11
+    shr     rax, 32
+    xor     eax, edx
+    sub     eax, edx
     mov     r8d, eax
     mov     eax, r9d
     shl     eax, 8
     cdq
-    idiv    ecx
+    xor     eax, edx
+    sub     eax, edx
+    imul    rax, r11
+    shr     rax, 32
+    xor     eax, edx
+    sub     eax, edx
     mov     r9d, eax
     shl     ebx, 8
     shl     esi, 8
     mov     r11, [los_map]
+    lea     rax, [opq]
+    cmp     r11, rax
+    jne     .step                       ; другие карты — шаг за шагом
+    ; по opq — с перешагиванием открытого: шаг луча меньше ½ тайла, и если до
+    ; ближайшего непрозрачного df тайлов, следующие 2(df − 1) шагов заведомо идут по
+    ; открытому — туда же, куда пришёл бы шаг за шагом (pos + k·step), без проверок
+    push    rdi
+    lea     rdi, [opq_df]
+.fast:
+    mov     eax, esi
+    sar     eax, 16
+    shl     eax, 7
+    mov     edx, ebx
+    sar     edx, 16
+    add     eax, edx
+    movzx   edx, byte [rdi + rax]
+    lea     edx, [rdx*2 - 2]
+    cmp     edx, 2
+    jl      .f1
+    cmp     edx, ecx
+    cmova   edx, ecx
+    mov     eax, r8d
+    imul    eax, edx
+    add     ebx, eax
+    mov     eax, r9d
+    imul    eax, edx
+    add     esi, eax
+    sub     ecx, edx
+    jnz     .fast
+    pop     rdi
+    jmp     .clear
+.f1:
+    add     ebx, r8d
+    add     esi, r9d
+    mov     eax, esi
+    sar     eax, 16
+    shl     eax, 7
+    mov     edx, ebx
+    sar     edx, 16
+    add     eax, edx
+    cmp     eax, r10d
+    je      .f2
+    cmp     byte [r11 + rax], 0
+    jne     .fblk
+.f2:
+    dec     ecx
+    jnz     .fast
+    pop     rdi
+    jmp     .clear
+.fblk:
+    pop     rdi
+    jmp     .blocked
 .step:
     add     ebx, r8d
     add     esi, r9d

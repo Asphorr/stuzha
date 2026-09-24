@@ -23,6 +23,7 @@ new_game:
     rep     stosb
     call    gen_map
     call    build_opq
+    call    build_opq_df                ; для los_ray: перешагивать открытое
     call    build_cmap
     call    calc_hmap                   ; до света: фонари бросают тени по высотам
     call    wind_init                   ; погода на ночь, заслоны ветру — по карте высот

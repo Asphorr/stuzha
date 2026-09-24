@@ -1367,12 +1367,52 @@ draw_frost:
     mulss   xmm0, [f_215]
     movss   xmm1, [f_255]
     subss   xmm1, xmm0
-    cvttss2si r8d, xmm1                 ; порог
+    cvttss2si eax, xmm1
+    mov     [frost_thr], eax            ; порог
+    sub     rsp, 40
+    lea     rcx, [frost_rows]
+    mov     edx, SCR_H
+    mov     r8d, 8
+    call    par_for
+    add     rsp, 40
+.out:
+    ret
+
+; строки ecx .. edx−1 (с любого потока пула)
+frost_rows:
+    push    rsi
+    imul    ecx, ecx, SCR_W
+    imul    esi, edx, SCR_W
+    mov     r8d, [frost_thr]
     mov     r9, [fbbits]
     lea     r10, [frost]
     movq    xmm5, [frost_col]
     pxor    xmm4, xmm4
-    xor     ecx, ecx
+    ; 16 байт маски, ни один не выше порога, — мимо разом (порог < 0 — без пропусков)
+    mov     eax, r8d
+    mov     edx, 255
+    cmp     eax, edx
+    cmovg   eax, edx
+    movd    xmm3, eax
+    punpcklbw xmm3, xmm3
+    pshuflw xmm3, xmm3, 0
+    punpcklqdq xmm3, xmm3
+    mov     r11d, r8d
+    sar     r11d, 31
+.ch:
+    cmp     ecx, esi
+    jae     .done
+    lea     edx, [rcx + 16]
+    test    r11d, r11d
+    jnz     .l
+    movdqu  xmm0, [r10 + rcx]
+    psubusb xmm0, xmm3
+    pcmpeqb xmm0, xmm4
+    pmovmskb eax, xmm0
+    cmp     eax, 0xFFFF
+    jne     .l
+    mov     ecx, edx
+    jmp     .ch
 .l:
     movzx   eax, byte [r10 + rcx]
     sub     eax, r8d
@@ -1395,9 +1435,11 @@ draw_frost:
     movd    [r9 + rcx*4], xmm0
 .n:
     inc     ecx
-    cmp     ecx, SCR_W*SCR_H
+    cmp     ecx, edx
     jb      .l
-.out:
+    jmp     .ch
+.done:
+    pop     rsi
     ret
 
 ; ---------------------------------------------------------------- отладка

@@ -863,6 +863,7 @@ pl_ws:      dd 0.0
 pl_wsm:     dd 0.0
 pl_warm:    dd 100.0                    ; тепло 0..100
 frost_lvl:  dd 0.0                      ; иней на кадре 0..1
+frost_thr:  dd 0                        ; порог маски инея на этот кадр (draw_frost)
 mv_wp:      dd 0.0                      ; ветер вдоль хода игрока
 z_wvx:      dd 0.0                      ; ветер у зомби
 z_wvy:      dd 0.0
@@ -1370,6 +1371,9 @@ vign:       resb SCR_W*SCR_H
 grain:      resb 65536
 tmap:       resb MAPW*MAPW
 opq:        resb MAPW*MAPW
+opq_df:     resb MAPW*MAPW              ; до ближайшего непрозрачного, тайлы (build_opq_df)
+alignb 8
+los_rcp:    resq LOSN                   ; ⌈2^32 / n⌉ — шаг луча без деления
 opqw:       resb MAPW*MAPW              ; то же, окна непрозрачны (свет комнаты)
 cmap:       resb MAPW*MAPW              ; набор фигур столкновения (CS_*)
 losg:       resb GW*GW
