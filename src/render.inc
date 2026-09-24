@@ -2633,6 +2633,10 @@ draw_entity:
 light_pass:
     sub     rsp, 40
     lea     rcx, [light_rows]
+    cmp     dword [have_avx2], 0
+    je      .sse
+    lea     rcx, [light_rows_x]         ; то же на AVX2, по 4 пикселя (lightx.inc)
+.sse:
     mov     edx, SCR_H
     mov     r8d, 8
     call    par_for

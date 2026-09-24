@@ -1,4 +1,4 @@
-param([string]$n = "1", [int]$runs = 1, [switch]$fs, [string]$exe = "stuzha.exe", [int]$skip = 30, [int]$threads = 0)
+param([string]$n = "1", [int]$runs = 1, [switch]$fs, [string]$exe = "stuzha.exe", [int]$skip = 30, [int]$threads = 0, [string]$extra = "")
 # --shotN --bench: сцена в живом окне, по каждому проходу минимум, медиана и p90 по всем
 # кадрам (медиана устойчива к фону: виртуалка, браузер); fps — по медиане полного кадра.
 # Слоты: 0..7 проходы рендера, 8 — передача кадра потоку вывода, 9 — update,
@@ -9,7 +9,7 @@ $order = 12, 1, 2, 3, 4, 0, 18, 5, 14, 15, 16, 17, 6, -2, 7, 8, 9, 10
 $rows = [System.Collections.Generic.List[double[]]]::new()
 Push-Location $PSScriptRoot
 for ($r = 0; $r -lt $runs; $r++) {
-  $a = @("--shot$n", "--bench"); if ($fs) { $a += "--fs" }; if ($threads) { $a += "--threads $threads" }
+  $a = @("--shot$n", "--bench"); if ($fs) { $a += "--fs" }; if ($threads) { $a += "--threads $threads" }; if ($extra) { $a += $extra }
   Remove-Item "$PSScriptRoot\bench.bin" -ErrorAction SilentlyContinue
   $p = Start-Process ".\$exe" -ArgumentList $a -Wait -PassThru
   if ($p.ExitCode -ne 0 -or -not (Test-Path "$PSScriptRoot\bench.bin")) { Pop-Location; throw ("run {0}: exit 0x{1:X8}, no bench.bin" -f $r, $p.ExitCode) }

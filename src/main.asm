@@ -27,6 +27,7 @@ start:
     lea     rcx, [qpc_last]
     call    [QueryPerformanceCounter]
     call    parse_cmdline
+    call    cpu_detect
     call    pool_init
     mov     eax, [qpc_last]
     or      eax, 1
@@ -803,6 +804,13 @@ parse_cmdline:
     mov     dword [dbg_intro], 1
     jmp     .next
 .nin:
+    cmp     word [rax+4], 'n'           ; --noavx: только SSE2 (сверка AVX2-путей)
+    jne     .nnx
+    cmp     word [rax+6], 'o'
+    jne     .nnx
+    mov     dword [no_avx], 1
+    jmp     .next
+.nnx:
     cmp     word [rax+4], 't'           ; --threads N: потоков рендера (1 — без пула)
     jne     .nth
     cmp     word [rax+6], 'h'
@@ -1777,6 +1785,7 @@ draw_text:
 %include "roof.inc"
 %include "snow.inc"
 %include "post.inc"
+%include "lightx.inc"
 %include "pool.inc"
 %include "audio.inc"
 %include "data.inc"
