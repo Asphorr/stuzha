@@ -30,12 +30,61 @@ bloom_pass:
     push    r15
     push    rbp
     sub     rsp, 40
+    lea     rcx, [bloom_down]
+    mov     edx, BLH
+    mov     r8d, 4
+    call    par_for
+    ; размытие
+    mov     r15d, 2
+.bit:
+    lea     rsi, [blA]
+    lea     rdi, [blB]
+    mov     r8d, 8
+    mov     r9d, BLW*8
+    mov     r10d, BLW
+    mov     r11d, BLH
+    call    blur_box
+    lea     rsi, [blB]
+    lea     rdi, [blA]
+    mov     r8d, BLW*8
+    mov     r9d, 8
+    mov     r10d, BLH
+    mov     r11d, BLW
+    call    blur_box
+    dec     r15d
+    jnz     .bit
+    lea     rcx, [bloom_add]
+    mov     edx, SCR_H
+    mov     r8d, 8
+    call    par_for
+    add     rsp, 40
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; строки блоков ecx .. edx−1: эмиссивное альбедо 4x4 -> blA (с любого потока пула)
+bloom_down:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    mov     r12d, ecx
+    mov     r14d, edx
     pxor    xmm15, xmm15
     movdqa  xmm14, [bl_hot11]
     movdqa  xmm13, [w_one]
     movdqa  xmm12, [rgb_mask]
+    imul    eax, ecx, BLW*8
     lea     rdi, [blA]
-    xor     r12d, r12d
+    add     rdi, rax
 .by:
     imul    esi, r12d, SCR_W*4*4
     lea     rbx, [albedo]
@@ -82,34 +131,36 @@ bloom_pass:
     cmp     r13d, BLW
     jb      .bx
     inc     r12d
-    cmp     r12d, BLH
+    cmp     r12d, r14d
     jb      .by
-    ; размытие
-    mov     r15d, 2
-.bit:
-    lea     rsi, [blA]
-    lea     rdi, [blB]
-    mov     r8d, 8
-    mov     r9d, BLW*8
-    mov     r10d, BLW
-    mov     r11d, BLH
-    call    blur_box
-    lea     rsi, [blB]
-    lea     rdi, [blA]
-    mov     r8d, BLW*8
-    mov     r9d, 8
-    mov     r10d, BLH
-    mov     r11d, BLW
-    call    blur_box
-    dec     r15d
-    jnz     .bit
-    ; сложение с кадром
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; строки кадра ecx .. edx−1: blA билинейно, сложить с кадром (с любого потока пула;
+; строка блума по x — на своём стеке)
+BL_ROWSZ equ (BLW+2)*8
+bloom_add:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+    sub     rsp, BL_ROWSZ + 8
+    mov     [rsp + BL_ROWSZ], edx       ; конец диапазона
+    mov     r12d, ecx                   ; y
     mov     r8, [fbbits]
     movdqa  xmm11, [bl_gain]
     movdqa  xmm10, [w_400]
-    lea     rbx, [bl_row]
+    mov     rbx, rsp                    ; строка блума
     lea     r15, [bl_wt]
-    xor     r12d, r12d                  ; y
 .oy:
     lea     eax, [r12d - 1]
     mov     ecx, eax
@@ -181,9 +232,9 @@ bloom_pass:
     cmp     r14d, SCR_W
     jb      .ox
     inc     r12d
-    cmp     r12d, SCR_H
+    cmp     r12d, [rsp + BL_ROWSZ]
     jb      .oy
-    add     rsp, 40
+    add     rsp, BL_ROWSZ + 8
     pop     rbp
     pop     r15
     pop     r14

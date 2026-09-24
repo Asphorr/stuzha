@@ -52,6 +52,7 @@ start:
     cmp     dword [shotmode], 0
     jne     run_shot
     call    create_window
+    call    pr_init
     call    audio_init                  ; нет устройства — молча без звука
 
 main_loop:
@@ -98,8 +99,7 @@ main_loop:
     mulss   xmm0, [f_0_05]
     addss   xmm0, [frame_ms]
     movss   [frame_ms], xmm0
-    call    present
-    call    [DwmFlush]
+    call    frame_out                   ; надписи, окно и DwmFlush — в потоке вывода
     jmp     main_loop
 
 ; -> xmm0 = мс с момента qpc_now
@@ -425,10 +425,12 @@ run_shot:
 ; кадров update + render + present без DwmFlush; каждый проход каждого кадра ->
 ; bench.bin (NBENCH, BSLOTS, частота QPC, затем тики), разбор — build\bench.ps1
 NBENCH equ 600
-BSLOTS equ 12                           ; 0..7 — проходы рендера, 8 — present, 9 — update,
-                                        ; 10, 11 — свободные: PROF 10/11 для точечных замеров
+BSLOTS equ 20                           ; 0..7 — проходы рендера, 8 — передача кадра, 9 — update,
+                                        ; 10 — поток вывода, 11 — весь кадр, 12..19 — части проходов
 bench_run:
     call    create_window
+    mov     dword [pr_nodwm], 1         ; поток вывода не ждёт экран
+    call    pr_init
     mov     dword [dt], __float32__(0.0060606)  ; 1/165 с — как на мониторе 165 Гц
     xor     esi, esi
 .fr:
@@ -451,7 +453,7 @@ bench_run:
 .go:
     lea     rdi, [prof_acc]
     xor     eax, eax
-    mov     ecx, 16*8
+    mov     ecx, 24*8
     rep     stosb
     lea     rcx, [qpc_now]
     call    [QueryPerformanceCounter]
@@ -462,13 +464,19 @@ bench_run:
     sub     rax, [qpc_now]
     mov     [prof_acc + 9*8], rax
     call    render
-    call    present
-    call    [GdiFlush]                  ; StretchBlt доходит до окна здесь
+    call    frame_out                   ; 8 — ожидание потока вывода и передача кадра
     lea     rcx, [qpc_end]
     call    [QueryPerformanceCounter]
     mov     rax, [qpc_end]
     sub     rax, [prof_last]
     mov     [prof_acc + 8*8], rax
+    mov     rax, [pr_ticks]             ; 10 — надписи и вывод прошлого кадра (в потоке)
+    mov     [prof_acc + 10*8], rax
+    mov     rax, [sky_ticks]            ; 18 — фоновая развёртка теней (рядом с объектами)
+    mov     [prof_acc + 18*8], rax
+    mov     rax, [qpc_end]              ; 11 — весь кадр, от update до передачи
+    sub     rax, [qpc_now]
+    mov     [prof_acc + 11*8], rax
     imul    edi, esi, BSLOTS*8
     lea     rax, [bench_buf]
     add     rdi, rax
@@ -858,23 +866,38 @@ parse_cmdline:
 
 ; ---------------------------------------------------------------- GDI
 init_gdi:
-    sub     rsp, 0x78
+    push    rbx
+    sub     rsp, 0x70
+    ; два буфера кадра: в один рисуем, другой в это время уходит в окно
+    xor     ebx, ebx
+.buf:
     xor     ecx, ecx
     call    [CreateCompatibleDC]
-    mov     [memdc], rax
+    lea     rdx, [fb_dc]
+    mov     [rdx + rbx*8], rax
     mov     rcx, rax
     lea     rdx, [bmi]
     xor     r8d, r8d
-    lea     r9, [fbbits]
+    lea     r9, [fb_bits]
+    lea     r9, [r9 + rbx*8]
     mov     qword [rsp+32], 0
     mov     qword [rsp+40], 0
     call    [CreateDIBSection]
-    mov     rcx, [memdc]
+    lea     rdx, [fb_dc]
+    mov     rcx, [rdx + rbx*8]
     mov     rdx, rax
     call    [SelectObject]
-    mov     rcx, [memdc]
+    lea     rdx, [fb_dc]
+    mov     rcx, [rdx + rbx*8]
     mov     edx, 1                      ; TRANSPARENT
     call    [SetBkMode]
+    inc     ebx
+    cmp     ebx, 2
+    jb      .buf
+    mov     rax, [fb_dc]
+    mov     [memdc], rax
+    mov     rax, [fb_bits]
+    mov     [fbbits], rax
     mov     ecx, -12
     mov     edx, 700
     lea     r8, [s_face_mono]
@@ -890,7 +913,8 @@ init_gdi:
     lea     r8, [s_face_serif]
     call    make_font
     mov     [font_b], rax
-    add     rsp, 0x78
+    add     rsp, 0x70
+    pop     rbx
     ret
 
 ; ecx = высота, edx = жирность, r8 = имя шрифта -> rax
@@ -1142,8 +1166,11 @@ black_bar:
 .no:
     ret
 
+; ecx = буфер -> окно
 present:
-    sub     rsp, 0x58
+    push    rbx
+    sub     rsp, 0x60
+    mov     ebx, ecx
     ; поля вокруг кадра (окно тянется, экран не 16:9)
     xor     ecx, ecx
     xor     edx, edx
@@ -1175,7 +1202,8 @@ present:
     mov     r9d, [vw_w]
     mov     eax, [vw_h]
     mov     [rsp+32], rax
-    mov     rax, [memdc]
+    lea     rax, [fb_dc]
+    mov     rax, [rax + rbx*8]
     mov     [rsp+40], rax
     mov     qword [rsp+48], 0
     mov     qword [rsp+56], 0
@@ -1183,7 +1211,8 @@ present:
     mov     qword [rsp+72], SCR_H
     mov     qword [rsp+80], 0x00CC0020  ; SRCCOPY
     call    [StretchBlt]
-    add     rsp, 0x58
+    add     rsp, 0x60
+    pop     rbx
     ret
 
 ; ---------------------------------------------------------------- ввод
@@ -1264,64 +1293,224 @@ read_input:
 
 ; ---------------------------------------------------------------- текст
 ; ecx = x, edx = y, r8 = строка UTF-16, r9d = COLORREF (0x00BBGGRR)
-text_out:
-    push    rbx
-    push    rsi
-    push    rdi
-    push    r12
-    push    r13
-    sub     rsp, 48
-    mov     ebx, ecx
-    mov     esi, edx
-    mov     rdi, r8
-    mov     r12d, r9d
+; Надписи идут очередью: set_font и text_out пишут команды в список кадра (свой у
+; каждого из двух буферов), tq_run исполняет его через GDI в том же порядке. В
+; живой игре это делает поток вывода, пока главный считает следующий кадр в другом
+; буфере (GDI-текст — ~1.2 мс, и он теперь не на пути кадра); в снимках — сразу,
+; в конце render. Пиксели те же: те же вызовы GDI в том же порядке
+TQMAX   equ 40                          ; команд на кадр
+TQSZ    equ 288
+TQ_T    equ 0                           ; 0 — шрифт, 1 — строка
+TQ_FONT equ 8                           ; шрифт: HFONT, выравнивание
+TQ_ALN  equ 16
+TQ_X    equ 4                           ; строка: x, y, цвет, число знаков, знаки
+TQ_Y    equ 8
+TQ_COL  equ 12
+TQ_LEN  equ 16
+TQ_STR  equ 20                          ; до 127 знаков UTF-16
+
+; -> rax = место под команду в списке текущего буфера (0 — список полон);
+; портит rcx, rdx, r8
+tq_slot:
+    mov     eax, [fb_cur]
+    lea     rdx, [tq_n]
+    mov     ecx, [rdx + rax*4]
+    cmp     ecx, TQMAX
+    jae     .full
+    lea     r8d, [rcx + 1]
+    mov     [rdx + rax*4], r8d
+    imul    eax, eax, TQMAX*TQSZ
+    imul    ecx, ecx, TQSZ
+    add     eax, ecx
+    lea     rdx, [tq_buf]
+    add     rax, rdx
+    ret
+.full:
     xor     eax, eax
-.len:
-    cmp     word [rdi + rax*2], 0
-    je      .gl
-    inc     eax
-    jmp     .len
-.gl:
-    mov     r13d, eax
-    mov     rcx, [memdc]
-    mov     edx, 0x00100808
-    call    [SetTextColor]
-    mov     rcx, [memdc]
-    lea     edx, [rbx+1]
-    lea     r8d, [rsi+1]
-    mov     r9, rdi
-    mov     [rsp+32], r13
-    call    [TextOutW]
-    mov     rcx, [memdc]
-    mov     edx, r12d
-    call    [SetTextColor]
-    mov     rcx, [memdc]
-    mov     edx, ebx
-    mov     r8d, esi
-    mov     r9, rdi
-    mov     [rsp+32], r13
-    call    [TextOutW]
-    add     rsp, 48
-    pop     r13
-    pop     r12
-    pop     rdi
+    ret
+
+; ecx = x, edx = y, r8 = строка UTF-16, r9d = COLORREF (0x00BBGGRR): тень (+1,+1), текст
+text_out:
+    push    rsi
+    mov     rsi, r8
+    mov     r10d, ecx
+    mov     r11d, edx
+    call    tq_slot
+    test    rax, rax
+    jz      .out
+    mov     dword [rax + TQ_T], 1
+    mov     [rax + TQ_X], r10d
+    mov     [rax + TQ_Y], r11d
+    mov     [rax + TQ_COL], r9d
+    xor     ecx, ecx
+.cp:
+    movzx   edx, word [rsi + rcx*2]
+    test    edx, edx
+    jz      .end
+    mov     [rax + TQ_STR + rcx*2], dx
+    inc     ecx
+    cmp     ecx, 127
+    jb      .cp
+.end:
+    mov     [rax + TQ_LEN], ecx
+.out:
     pop     rsi
-    pop     rbx
     ret
 
 ; rcx = шрифт, edx = выравнивание (0 = TA_LEFT, 6 = TA_CENTER)
 set_font:
+    mov     r10, rcx
+    mov     r11d, edx
+    call    tq_slot
+    test    rax, rax
+    jz      .out
+    mov     dword [rax + TQ_T], 0
+    mov     [rax + TQ_FONT], r10
+    mov     [rax + TQ_ALN], r11d
+.out:
+    ret
+
+; ecx = буфер: его надписи — через GDI в его DC, список — пуст
+tq_run:
+    push    rbx
+    push    rsi
+    push    r12
+    push    r13
+    sub     rsp, 56
+    mov     r12d, ecx
+    lea     rax, [fb_dc]
+    mov     r13, [rax + r12*8]
+    lea     rax, [tq_n]
+    mov     ebx, [rax + r12*4]
+    mov     dword [rax + r12*4], 0
+    imul    eax, r12d, TQMAX*TQSZ
+    lea     rsi, [tq_buf]
+    add     rsi, rax
+    test    ebx, ebx
+    jz      .done
+.cmd:
+    cmp     dword [rsi + TQ_T], 0
+    jne     .text
+    mov     rcx, r13
+    mov     rdx, [rsi + TQ_FONT]
+    call    [SelectObject]
+    mov     rcx, r13
+    mov     edx, [rsi + TQ_ALN]
+    call    [SetTextAlign]
+    jmp     .nx
+.text:
+    mov     rcx, r13
+    mov     edx, 0x00100808
+    call    [SetTextColor]
+    mov     rcx, r13
+    mov     edx, [rsi + TQ_X]
+    inc     edx
+    mov     r8d, [rsi + TQ_Y]
+    inc     r8d
+    lea     r9, [rsi + TQ_STR]
+    mov     eax, [rsi + TQ_LEN]
+    mov     [rsp+32], rax
+    call    [TextOutW]
+    mov     rcx, r13
+    mov     edx, [rsi + TQ_COL]
+    call    [SetTextColor]
+    mov     rcx, r13
+    mov     edx, [rsi + TQ_X]
+    mov     r8d, [rsi + TQ_Y]
+    lea     r9, [rsi + TQ_STR]
+    mov     eax, [rsi + TQ_LEN]
+    mov     [rsp+32], rax
+    call    [TextOutW]
+.nx:
+    add     rsi, TQSZ
+    dec     ebx
+    jnz     .cmd
+.done:
+    call    [GdiFlush]
+    add     rsp, 56
+    pop     r13
+    pop     r12
+    pop     rsi
+    pop     rbx
+    ret
+
+; ---------------------------------------------------------------- поток вывода
+; живая игра: главный поток отдаёт готовый кадр (всё, кроме надписей) и сразу
+; считает следующий в другом буфере; этот поток пишет надписи, выводит кадр в
+; окно и ждёт DwmFlush. Главный опережает его не больше чем на кадр
+pr_init:
+    sub     rsp, 56
+    xor     ecx, ecx
+    xor     edx, edx                    ; авто-сброс
+    xor     r8d, r8d
+    xor     r9d, r9d
+    call    [CreateEventW]
+    mov     [ev_ready], rax
+    xor     ecx, ecx
+    xor     edx, edx
+    mov     r8d, 1                      ; буфер свободен с самого начала
+    xor     r9d, r9d
+    call    [CreateEventW]
+    mov     [ev_done], rax
+    xor     ecx, ecx
+    xor     edx, edx
+    lea     r8, [pr_thread]
+    xor     r9d, r9d
+    mov     qword [rsp+32], 0
+    mov     qword [rsp+40], 0
+    call    [CreateThread]
+    mov     dword [pr_on], 1
+    add     rsp, 56
+    ret
+
+pr_thread:
     push    rbx
     sub     rsp, 32
-    mov     ebx, edx
-    mov     rdx, rcx
-    mov     rcx, [memdc]
-    call    [SelectObject]
-    mov     rcx, [memdc]
-    mov     edx, ebx
-    call    [SetTextAlign]
-    add     rsp, 32
-    pop     rbx
+.loop:
+    mov     rcx, [ev_ready]
+    mov     edx, -1
+    call    [WaitForSingleObject]
+    lea     rcx, [pr_t0]
+    call    [QueryPerformanceCounter]
+    mov     ecx, [pr_buf]
+    call    tq_run
+    mov     ecx, [pr_buf]
+    call    present
+    call    [GdiFlush]
+    lea     rcx, [pr_t1]
+    call    [QueryPerformanceCounter]
+    mov     rax, [pr_t1]
+    sub     rax, [pr_t0]
+    mov     [pr_ticks], rax
+    cmp     dword [pr_nodwm], 0         ; --bench: без ожидания экрана
+    jne     .nd
+    call    [DwmFlush]
+.nd:
+    mov     rcx, [ev_done]
+    call    [SetEvent]
+    jmp     .loop
+
+; кадр в буфере fb_cur готов (кроме надписей): дождаться, пока поток вывода
+; отпустит прошлый, отдать ему этот и перейти на другой буфер
+frame_out:
+    sub     rsp, 40
+    mov     rcx, [ev_done]
+    mov     edx, -1
+    call    [WaitForSingleObject]
+    mov     eax, [fb_cur]
+    mov     [pr_buf], eax
+    mov     rcx, [ev_ready]
+    call    [SetEvent]
+    mov     eax, [fb_cur]
+    xor     eax, 1
+    mov     [fb_cur], eax
+    lea     rdx, [fb_dc]
+    mov     rcx, [rdx + rax*8]
+    mov     [memdc], rcx
+    lea     rdx, [fb_bits]
+    mov     rcx, [rdx + rax*8]
+    mov     [fbbits], rcx
+    add     rsp, 40
     ret
 
 ; rdi = буфер, eax = число -> rdi продвинут

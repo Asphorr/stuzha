@@ -541,15 +541,23 @@ wrap_add:
 ; ---------------------------------------------------------------- ветер в точке
 ; xmm0 = x, xmm1 = y (тайлы), xmm2 = высота над снегом, px ->
 ;   xmm0 = vx, xmm1 = vy (сила·направление), xmm2 = сила, xmm3 = завихрения
-; затишье у земли целиком, выше 90 px его нет. Портит eax, ecx, edx, r8-r11, xmm4, xmm5
+; затишье у земли целиком, выше 90 px его нет. Портит eax, ecx, edx, r8-r11, xmm4, xmm5.
+; Своё держит на стеке — зовут и с потоков рендера (фоновая маска позёмки рядом с
+; деревьями на главном); wv_sh, wv_gf — только выход, для тех, кто зовёт в одиночку
+WV_X  equ 0
+WV_Y  equ 4
+WV_HF equ 8
+WV_SH equ 12
+WV_G1 equ 16
 wind_vec:
-    movss   [wv_x], xmm0
-    movss   [wv_y], xmm1
+    sub     rsp, 24
+    movss   [rsp + WV_X], xmm0
+    movss   [rsp + WV_Y], xmm1
     movss   xmm4, [f_90]
     subss   xmm4, xmm2
     mulss   xmm4, [f_inv70]
     CLAMP01 xmm4
-    movss   [wv_hf], xmm4
+    movss   [rsp + WV_HF], xmm4
     ; затишье: 2 ячейки на тайл, центры на +0.5, билинейно
     mulss   xmm0, [f_512]
     cvttss2si eax, xmm0
@@ -594,28 +602,28 @@ wind_vec:
     add     ecx, r10d
     cvtsi2ss xmm4, ecx
     mulss   xmm4, [f_inv65280]
-    mulss   xmm4, [wv_hf]
-    movss   [wv_sh], xmm4
+    mulss   xmm4, [rsp + WV_HF]
+    movss   [rsp + WV_SH], xmm4
 .gust:
     ; порывы: крупные пятна (тексель 1.6 тайла) и мелкие (0.55), бегут по ветру
-    movss   xmm0, [wv_x]
+    movss   xmm0, [rsp + WV_X]
     subss   xmm0, [gst_ox]
     addss   xmm0, [f_gp1]
     mulss   xmm0, [f_gk1]
     cvttss2si eax, xmm0
-    movss   xmm0, [wv_y]
+    movss   xmm0, [rsp + WV_Y]
     subss   xmm0, [gst_oy]
     addss   xmm0, [f_gp1]
     mulss   xmm0, [f_gk1]
     cvttss2si ecx, xmm0
     call    nz64
-    mov     [wv_g1], eax
-    movss   xmm0, [wv_x]
+    mov     [rsp + WV_G1], eax
+    movss   xmm0, [rsp + WV_X]
     subss   xmm0, [gs2_ox]
     addss   xmm0, [f_gp2]
     mulss   xmm0, [f_gk2]
     cvttss2si eax, xmm0
-    movss   xmm0, [wv_y]
+    movss   xmm0, [rsp + WV_Y]
     subss   xmm0, [gs2_oy]
     addss   xmm0, [f_gp2]
     mulss   xmm0, [f_gk2]
@@ -623,7 +631,7 @@ wind_vec:
     call    nz64
     cvtsi2ss xmm5, eax
     mulss   xmm5, [f_inv65280]          ; G2
-    cvtsi2ss xmm0, dword [wv_g1]
+    cvtsi2ss xmm0, dword [rsp + WV_G1]
     mulss   xmm0, [f_inv65280]          ; G1
     mulss   xmm0, [f_0_65]
     movss   xmm1, xmm5
@@ -638,7 +646,8 @@ wind_vec:
     addss   xmm0, [f_1]                 ; порыв: 1 ± размах
     movss   [wv_gf], xmm0
     ; сила = общая · порыв · (1 − 0.9·затишье)
-    movss   xmm2, [wv_sh]
+    movss   xmm2, [rsp + WV_SH]
+    movss   [wv_sh], xmm2
     mulss   xmm2, [f_0_9]
     movss   xmm1, [f_1]
     subss   xmm1, xmm2
@@ -646,7 +655,7 @@ wind_vec:
     mulss   xmm0, [wind_g]
     movss   xmm2, xmm0
     ; завихрения: сильнее всего на краю затишья
-    movss   xmm3, [wv_sh]
+    movss   xmm3, [rsp + WV_SH]
     movss   xmm1, [f_1]
     subss   xmm1, xmm3
     mulss   xmm3, xmm1
@@ -666,13 +675,15 @@ wind_vec:
     movaps  xmm0, xmm4
     mulss   xmm0, xmm2
     mulss   xmm1, xmm2
+    add     rsp, 24
     ret
 
 ; то же над крышами и кронами — без затишья (xmm2 не нужен)
 wind_top:
-    movss   [wv_x], xmm0
-    movss   [wv_y], xmm1
-    mov     dword [wv_sh], 0
+    sub     rsp, 24
+    movss   [rsp + WV_X], xmm0
+    movss   [rsp + WV_Y], xmm1
+    mov     dword [rsp + WV_SH], 0
     jmp     wind_vec.gust
 
 ; xmm0 = x, xmm1 = y (тайлы) -> xmm0 = сила ветра у земли (порывы, затишье)

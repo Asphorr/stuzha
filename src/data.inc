@@ -841,12 +841,8 @@ gst_ox:     dd 0.0                      ; сдвиг пятен порывов, 
 gst_oy:     dd 0.0
 gs2_ox:     dd 0.0
 gs2_oy:     dd 0.0
-wv_x:       dd 0.0                      ; wind_vec: точка, затишье, порыв
-wv_y:       dd 0.0
-wv_hf:      dd 0.0
-wv_sh:      dd 0.0
+wv_sh:      dd 0.0                      ; wind_vec: затишье и порыв последнего вызова
 wv_gf:      dd 1.0
-wv_g1:      dd 0
 wrng:       dd 0x9E3779B9               ; ГСЧ ветра и красоты
 vis_r:      dd 21.0                     ; дальность обзора, тайлы (в мгле меньше)
 vis_r2:     dd 441.0
@@ -1120,12 +1116,28 @@ align 8, db 0
 rq_sh:      dq 0
 prof_now:   dq 0                        ; замеры проходов рендера
 prof_last:  dq 0
-prof_acc:   times 16 dq 0
+prof_acc:   times 24 dq 0
 s_profname: dw __utf16__('prof.bin'), 0
 s_zlogname: dw __utf16__('zlog.bin'), 0
 s_benchname: dw __utf16__('bench.bin'), 0
 dbg_bench:  dd 0                        ; --bench: замер кадров в живом окне -> bench.bin
 dbg_intro:  dd 0                        ; --intro: заставка поверх снимка
+align 8, db 0
+fb_dc:      dq 0, 0                     ; два буфера кадра: DC и биты
+fb_bits:    dq 0, 0
+fb_cur:     dd 0                        ; в какой рисуем сейчас (memdc/fbbits — его)
+pr_buf:     dd 0                        ; какой ушёл в поток вывода
+pr_on:      dd 0                        ; есть поток вывода (живая игра, --bench)
+pr_nodwm:   dd 0                        ; --bench: вывод не ждёт экран
+ev_ready:   dq 0                        ; кадр отдан потоку вывода
+ev_done:    dq 0                        ; поток вывода отпустил буфер
+pr_t0:      dq 0
+pr_t1:      dq 0
+pr_ticks:   dq 0                        ; сколько поток вывода делал прошлый кадр
+tq_n:       dd 0, 0                     ; команд надписей в списке буфера
+sky_t0:     dq 0                        ; фоновая развёртка теней: начало, конец,
+sky_t1:     dq 0
+sky_ticks:  dq 0                        ; сколько шла (для --bench)
 align 8, db 0
 bench_n:    dd 0                        ; заголовок bench.bin: кадров, слотов, частота QPC
             dd BSLOTS
@@ -1345,6 +1357,7 @@ tbuf:       times 128 dw 0
 section .bss
 alignb 64
 bench_buf:  resq NBENCH*BSLOTS          ; --bench: время каждого прохода каждого кадра
+tq_buf:     resb 2*TQMAX*TQSZ           ; списки надписей двух буферов
 albedo:     resd SCR_W*SCR_H
 gposb:      resd SCR_W*SCR_H
 lgrid:      resd GW*GW
@@ -1409,7 +1422,6 @@ alignb 16
 parts:      resb MAXP*P_SZ
 blA:        resq BLW*BLH
 blB:        resq BLW*BLH
-bl_row:     resq BLW+2
 lamps:      resd MAXLAMP
 wires:      resq MAXWIRE
 smk:        resw MAXSMK

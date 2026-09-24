@@ -23,36 +23,65 @@ render:
     call    cam_snap
     call    build_ntab                  ; луна и небо по нормалям
     call    moon_grid                   ; облака
-    call    sky_sweep                   ; тени луны по высотам (+ облака в ячейках)
-    call    build_wgrid                 ; где у земли метёт — маска позёмки
-    PROF    0
+    PROF    12
     call    build_flash_occ
     call    compute_lightgrid
     call    ent_shadows                 ; тени людей от фонарей и окон
     PROF    1
     call    floor_pass
     PROF    2
+    ; тени луны и маска позёмки нужны только свету: считаются фоном, пока главный
+    ; рисует объекты и крыши (им развёртка не нужна, а они — ей)
+    lea     rcx, [sky_job]
+    mov     edx, 1
+    mov     r8d, 1
+    call    par_async
     call    draw_objects
     PROF    3
     call    draw_roofs                  ; крыши поверх, с тестом глубины
     PROF    4
     call    draw_wires
+    call    par_wait
+    PROF    0
     call    light_pass
     PROF    5
     call    bloom_pass
+    PROF    14
     call    draw_cones
+    PROF    15
     call    draw_parts
     call    draw_swing                  ; след лопаты — где она достаёт
+    PROF    16
     call    draw_flakes
+    PROF    17
     call    draw_frost                  ; иней по краям кадра, когда игрок мёрзнет
     call    draw_hitboxes               ; F3
     PROF    6
     call    draw_hud
-    PROF    10
-    call    draw_text
+    call    draw_text                   ; надписи — очередью
+    cmp     dword [pr_on], 0
+    jne     .async
+    mov     ecx, [fb_cur]               ; снимки: сразу, в этот же буфер
+    call    tq_run
+.async:
     PROF    7
     add     rsp, 32
     pop     rbx
+    ret
+
+; фоновое задание кадра: развёртка теней луны, маска позёмки (время — в sky_ticks)
+sky_job:
+    sub     rsp, 40
+    lea     rcx, [sky_t0]
+    call    [QueryPerformanceCounter]
+    call    sky_sweep                   ; тени луны по высотам (+ облака в ячейках)
+    call    build_wgrid                 ; где у земли метёт — маска позёмки
+    lea     rcx, [sky_t1]
+    call    [QueryPerformanceCounter]
+    mov     rax, [sky_t1]
+    sub     rax, [sky_t0]
+    mov     [sky_ticks], rax
+    add     rsp, 40
     ret
 
 ; камера привязывается к целому пикселю изометрической решётки

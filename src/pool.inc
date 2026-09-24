@@ -114,13 +114,21 @@ pool_grab:
     pop     rbx
     ret
 
-; rcx = функция, edx = число элементов, r8d = порция
+; rcx = функция, edx = число элементов, r8d = порция: сделать и вернуться
 par_for:
-    push    rsi
-    sub     rsp, 32
+    sub     rsp, 40
+    call    par_async
+    call    par_wait
+    add     rsp, 40
+    ret
+
+; то же, но вернуться сразу: главный делает своё, потом par_wait. Пока задание
+; не дождались, другого не давать (место под задание одно)
+par_async:
+    sub     rsp, 40
     cmp     dword [pl_n], 1
     ja      .pool
-    mov     rax, rcx                    ; один поток — всё сразу
+    mov     rax, rcx                    ; один поток — всё сразу, по порядку
     xor     ecx, ecx
     call    rax
     jmp     .out
@@ -129,14 +137,24 @@ par_for:
     mov     [pl_count], edx
     mov     [pl_chunk], r8d
     mov     dword [pl_fin], 0
-    mov     esi, [pl_gen]
-    inc     esi
-    mov     [pl_gen], esi
-    mov     rax, rsi
+    mov     eax, [pl_gen]
+    inc     eax
+    mov     [pl_gen], eax
     shl     rax, 32
     xchg    [pl_ticket], rax            ; задание видно всем (xchg — полный барьер)
     lea     rcx, [pl_ticket + 4]
     call    [WakeByAddressAll]
+.out:
+    add     rsp, 40
+    ret
+
+; доделать с остальными последнее задание и дождаться всех его порций
+par_wait:
+    push    rsi
+    sub     rsp, 32
+    cmp     dword [pl_n], 1
+    jbe     .out
+    mov     esi, [pl_gen]
     call    pool_grab
 .wt:
     mov     eax, [pl_fin]
