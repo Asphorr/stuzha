@@ -27,6 +27,7 @@ start:
     lea     rcx, [qpc_last]
     call    [QueryPerformanceCounter]
     call    parse_cmdline
+    call    pool_init
     mov     eax, [qpc_last]
     or      eax, 1
     cmp     dword [shotmode], 0
@@ -328,6 +329,8 @@ run_shot:
     call    wav_pump
     dec     dword [shot_frames]
     jnz     .sim
+    cmp     dword [dbg_bench], 0
+    jne     bench_run
     ; прогрев, замер 10 рендеров, финальный кадр с цифрой
     call    render
     lea     rdi, [prof_acc]
@@ -396,6 +399,10 @@ run_shot:
     mov     rcx, rbx
     call    [CloseHandle]
 .nozl:
+    cmp     dword [dbg_intro], 0
+    je      .noin
+    mov     dword [elapsed], __float32__(3.0)   ; заставка видна первые 7 с
+.noin:
     call    render
     cmp     dword [dbg_lmap], 0
     je      .svw
@@ -412,6 +419,97 @@ run_shot:
     mov     [s_wavname + 8], ax
     lea     rcx, [s_wavname]
     call    wav_save
+    jmp     quit
+
+; --bench (со --shotN): та же сцена в живом окне (с --fs — во весь экран), NBENCH
+; кадров update + render + present без DwmFlush; каждый проход каждого кадра ->
+; bench.bin (NBENCH, BSLOTS, частота QPC, затем тики), разбор — build\bench.ps1
+NBENCH equ 600
+BSLOTS equ 12                           ; 0..7 — проходы рендера, 8 — present, 9 — update,
+                                        ; 10, 11 — свободные: PROF 10/11 для точечных замеров
+bench_run:
+    call    create_window
+    mov     dword [dt], __float32__(0.0060606)  ; 1/165 с — как на мониторе 165 Гц
+    xor     esi, esi
+.fr:
+.pump:
+    lea     rcx, [msg]
+    xor     edx, edx
+    xor     r8d, r8d
+    xor     r9d, r9d
+    mov     dword [rsp+32], 1           ; PM_REMOVE
+    call    [PeekMessageW]
+    test    eax, eax
+    jz      .go
+    cmp     dword [msg+8], 0x12         ; WM_QUIT
+    je      .save
+    lea     rcx, [msg]
+    call    [TranslateMessage]
+    lea     rcx, [msg]
+    call    [DispatchMessageW]
+    jmp     .pump
+.go:
+    lea     rdi, [prof_acc]
+    xor     eax, eax
+    mov     ecx, 16*8
+    rep     stosb
+    lea     rcx, [qpc_now]
+    call    [QueryPerformanceCounter]
+    call    update
+    lea     rcx, [qpc_end]
+    call    [QueryPerformanceCounter]
+    mov     rax, [qpc_end]
+    sub     rax, [qpc_now]
+    mov     [prof_acc + 9*8], rax
+    call    render
+    call    present
+    call    [GdiFlush]                  ; StretchBlt доходит до окна здесь
+    lea     rcx, [qpc_end]
+    call    [QueryPerformanceCounter]
+    mov     rax, [qpc_end]
+    sub     rax, [prof_last]
+    mov     [prof_acc + 8*8], rax
+    imul    edi, esi, BSLOTS*8
+    lea     rax, [bench_buf]
+    add     rdi, rax
+    lea     rax, [prof_acc]
+    xor     ecx, ecx
+.cp:
+    mov     rdx, [rax + rcx*8]
+    mov     [rdi + rcx*8], rdx
+    inc     ecx
+    cmp     ecx, BSLOTS
+    jb      .cp
+    inc     esi
+    cmp     esi, NBENCH
+    jb      .fr
+.save:
+    mov     [bench_n], esi
+    mov     rax, [qpf]
+    mov     [bench_qpf], rax
+    lea     rcx, [s_benchname]
+    mov     edx, 0x40000000
+    xor     r8d, r8d
+    xor     r9d, r9d
+    mov     qword [rsp+32], 2
+    mov     qword [rsp+40], 0x80
+    mov     qword [rsp+48], 0
+    call    [CreateFileW]
+    mov     rbx, rax
+    mov     rcx, rbx
+    lea     rdx, [bench_n]              ; bench_n, BSLOTS, qpf подряд
+    mov     r8d, 16
+    lea     r9, [written]
+    mov     qword [rsp+32], 0
+    call    [WriteFile]
+    mov     rcx, rbx
+    lea     rdx, [bench_buf]
+    imul    r8d, esi, BSLOTS*8
+    lea     r9, [written]
+    mov     qword [rsp+32], 0
+    call    [WriteFile]
+    mov     rcx, rbx
+    call    [CloseHandle]
     jmp     quit
 
 ; игрок — рядом с первой горящей печью
@@ -682,6 +780,39 @@ parse_cmdline:
     mov     dword [dbg_alog], 1
     jmp     .next
 .nal:
+    cmp     word [rax+4], 'b'           ; --bench: со --shotN — замер в живом окне -> bench.bin
+    jne     .nbn
+    cmp     word [rax+6], 'e'
+    jne     .nbn
+    mov     dword [dbg_bench], 1
+    jmp     .next
+.nbn:
+    cmp     word [rax+4], 'i'           ; --intro: в снимке поверх — заставка (название, управление)
+    jne     .nin
+    cmp     word [rax+6], 'n'
+    jne     .nin
+    mov     dword [dbg_intro], 1
+    jmp     .next
+.nin:
+    cmp     word [rax+4], 't'           ; --threads N: потоков рендера (1 — без пула)
+    jne     .nth
+    cmp     word [rax+6], 'h'
+    jne     .nth
+    lea     rdx, [rax+20]               ; за "--threads "
+    xor     ecx, ecx
+.thd:
+    movzx   r8d, word [rdx]
+    sub     r8d, '0'
+    cmp     r8d, 9
+    ja      .the
+    imul    ecx, ecx, 10
+    add     ecx, r8d
+    add     rdx, 2
+    jmp     .thd
+.the:
+    mov     [pl_want], ecx
+    jmp     .next
+.nth:
     cmp     word [rax+4], 's'
     jne     .next
     cmp     word [rax+6], 'h'
@@ -1456,5 +1587,6 @@ draw_text:
 %include "roof.inc"
 %include "snow.inc"
 %include "post.inc"
+%include "pool.inc"
 %include "audio.inc"
 %include "data.inc"

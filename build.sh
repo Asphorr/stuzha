@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 mkdir -p build
 (cd src && nasm -f win64 main.asm -o ../build/main.obj -l ../build/main.lst)
-LDARGS="build/main.obj -o build/stuzha.exe --subsystem windows -e start -Map build/stuzha.map -lkernel32 -luser32 -lgdi32 -ldwmapi -lwinmm"
+LDARGS="build/main.obj -o build/stuzha.exe --subsystem windows -e start -Map build/stuzha.map -lkernel32 -luser32 -lgdi32 -ldwmapi -lwinmm -lsynchronization"
 if command -v x86_64-w64-mingw32-ld >/dev/null 2>&1; then
     x86_64-w64-mingw32-ld $LDARGS
 else

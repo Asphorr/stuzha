@@ -285,3 +285,4 @@ IMPORT MonitorFromWindow, GetMonitorInfoW, PatBlt
 IMPORT CreateThread, CreateEventW, WaitForSingleObject, SetEvent, SetThreadPriority, GetCurrentThread
 IMPORT waveOutOpen, waveOutPrepareHeader, waveOutUnprepareHeader, waveOutWrite, waveOutReset
 IMPORT waveOutClose
+IMPORT GetActiveProcessorCount, WaitOnAddress, WakeByAddressAll

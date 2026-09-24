@@ -961,7 +961,6 @@ sw_sgn:     dd 1
 sw_g:       dd 0.0
 ; тени луны
 align 16, db 0
-lg_st:      dd 0.0, 0.0, 0.0, 0.0       ; сетка света: неподвижная часть сэмпла
 mk_k:       dd 0.0                      ; рост полутени луны на px пути
 m8_ox:      dd 0                        ; начало развёртки, ячейки
 m8_oy:      dd 0
@@ -1124,6 +1123,13 @@ prof_last:  dq 0
 prof_acc:   times 16 dq 0
 s_profname: dw __utf16__('prof.bin'), 0
 s_zlogname: dw __utf16__('zlog.bin'), 0
+s_benchname: dw __utf16__('bench.bin'), 0
+dbg_bench:  dd 0                        ; --bench: замер кадров в живом окне -> bench.bin
+dbg_intro:  dd 0                        ; --intro: заставка поверх снимка
+align 8, db 0
+bench_n:    dd 0                        ; заголовок bench.bin: кадров, слотов, частота QPC
+            dd BSLOTS
+bench_qpf:  dq 0
 
 ; палитра символов персонажей (индекс = ASCII)
 pal:
@@ -1338,6 +1344,7 @@ tbuf:       times 128 dw 0
 ; ============================================================================
 section .bss
 alignb 64
+bench_buf:  resq NBENCH*BSLOTS          ; --bench: время каждого прохода каждого кадра
 albedo:     resd SCR_W*SCR_H
 gposb:      resd SCR_W*SCR_H
 lgrid:      resd GW*GW

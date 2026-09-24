@@ -48,6 +48,7 @@ render:
     call    draw_hitboxes               ; F3
     PROF    6
     call    draw_hud
+    PROF    10
     call    draw_text
     PROF    7
     add     rsp, 32
@@ -112,6 +113,19 @@ cam_snap:
 ; ---------------------------------------------------------------- сетка света
 ; на каждый сэмпл (4 на тайл): небо·AO + фонари + (фонарик + аура) * видимость, A = конус обзора
 compute_lightgrid:
+    sub     rsp, 40
+    lea     rcx, [lg_rows]
+    mov     edx, GW
+    mov     r8d, 2
+    call    par_for
+    call    lg_soften
+    add     rsp, 40
+    ret
+
+; строки сетки ecx .. edx−1 (с любого потока пула; своё — только на стеке)
+LG_ST equ 32                            ; [rsp + LG_ST]: небо, огни и окна сэмпла
+LG_END equ 48                           ; конец диапазона
+lg_rows:
     push    rbx
     push    rsi
     push    rdi
@@ -120,12 +134,15 @@ compute_lightgrid:
     push    r14
     push    r15
     push    rbp
-    sub     rsp, 40
+    sub     rsp, 56
+    mov     [rsp + LG_END], edx
+    mov     r14d, ecx                   ; j
+    imul    eax, ecx, GW*4
+    lea     rdi, [lgrid]
+    add     rdi, rax
     pxor    xmm15, xmm15
     mov     r12d, [gox]
     mov     r13d, [goy]
-    lea     rdi, [lgrid]
-    xor     r14d, r14d                  ; j
 .row:
     xor     r15d, r15d                  ; i
 .col:
@@ -190,7 +207,7 @@ compute_lightgrid:
     mulps   xmm1, [amb_vec]
     addps   xmm0, xmm1
     ; видимое игроком (фонарик, аура, обзор) копится отдельно — в lgv, сгладится после
-    movaps  [lg_st], xmm0
+    movaps  [rsp + LG_ST], xmm0
     xorps   xmm0, xmm0
     shl     eax, 6
     shl     ebx, 6
@@ -356,14 +373,14 @@ compute_lightgrid:
     packssdw xmm0, xmm0
     packuswb xmm0, xmm0
     movd    [rdi + (lgv - lgrid)], xmm0
-    movaps  xmm0, [lg_st]
+    movaps  xmm0, [rsp + LG_ST]
     jmp     .store
 .novis:
     imul    eax, r14d, GW
     add     eax, r15d
     lea     rcx, [losg]
     mov     byte [rcx + rax], 0
-    movaps  xmm0, [lg_st]
+    movaps  xmm0, [rsp + LG_ST]
 .nov2:
     lea     rcx, [vgrid]
     mov     byte [rcx + rax], 0
@@ -386,10 +403,9 @@ compute_lightgrid:
     cmp     r15d, GW
     jb      .col
     inc     r14d
-    cmp     r14d, GW
+    cmp     r14d, [rsp + LG_END]
     jb      .row
-    call    lg_soften
-    add     rsp, 40
+    add     rsp, 56
     pop     rbp
     pop     r15
     pop     r14
@@ -404,6 +420,8 @@ compute_lightgrid:
 ; окном, углом и пятно фонарика у стен иначе режутся ступеньками по сэмплам.
 ; 2 прохода [1 2 1] по строкам и столбцам (≈ биномиальное 5x5), затем в сетку света
 lg_soften:
+    push    rsi
+    push    rdi
     mov     r9d, 2
 .pass:
     lea     rsi, [lgv]
@@ -442,11 +460,23 @@ lg_soften:
     add     ecx, 16
     cmp     ecx, GW*GW*4
     jb      .a
+    pop     rdi
+    pop     rsi
     ret
 
 ; ---------------------------------------------------------------- пол
 ; обратная изометрия по пикселю: wx += 8, wy -= 8 вдоль строки
 floor_pass:
+    sub     rsp, 40
+    lea     rcx, [floor_rows]
+    mov     edx, SCR_H
+    mov     r8d, 8
+    call    par_for
+    add     rsp, 40
+    ret
+
+; строки ecx .. edx−1 (с любого потока пула)
+floor_rows:
     push    rbx
     push    rsi
     push    rdi
@@ -455,11 +485,16 @@ floor_pass:
     push    r14
     push    r15
     push    rbp
-    lea     rdi, [albedo]
+    sub     rsp, 8
+    mov     [rsp], edx                  ; конец диапазона
+    mov     ebp, ecx
+    imul    eax, ecx, SCR_W
     lea     rsi, [nbuf]
+    add     rsi, rax
+    lea     rdi, [albedo]
+    lea     rdi, [rdi + rax*4]
     lea     rbx, [tmap]
     pxor    xmm15, xmm15
-    xor     ebp, ebp
 .row:
     mov     eax, ebp
     sub     eax, CY0
@@ -686,8 +721,9 @@ floor_pass:
     dec     r15d
     jnz     .px
     inc     ebp
-    cmp     ebp, SCR_H
+    cmp     ebp, [rsp]
     jb      .row
+    add     rsp, 8
     pop     rbp
     pop     r15
     pop     r14
@@ -2452,6 +2488,17 @@ draw_entity:
 ; albedo * L, память вне обзора — серым.
 ; Все попиксельные буферы и таблицы адресуются от albedo (одна секция .bss)
 light_pass:
+    sub     rsp, 40
+    lea     rcx, [light_rows]
+    mov     edx, SCR_H
+    mov     r8d, 8
+    call    par_for
+    inc     dword [frame_no]
+    add     rsp, 40
+    ret
+
+; строки ecx .. edx−1 (с любого потока пула: пишет только свои пиксели кадра)
+light_rows:
     push    rbx
     push    rsi
     push    rdi
@@ -2460,6 +2507,12 @@ light_pass:
     push    r14
     push    r15
     push    rbp
+    sub     rsp, 8
+    imul    eax, edx, SCR_W
+    mov     [rsp], eax                  ; конец диапазона, пиксель
+    mov     ebx, CY0                    ; CY0 − строка
+    sub     ebx, ecx
+    imul    ecx, ecx, SCR_W
     lea     rsi, [albedo]
     mov     r8, [fbbits]
     mov     r9d, [camx]
@@ -2474,8 +2527,6 @@ light_pass:
     movdqa  xmm13, [memtint_v]          ; в мгле «память» светлее
     movdqa  xmm12, [w255]
     movdqa  xmm11, [gray_w]
-    xor     ecx, ecx
-    mov     ebx, CY0                    ; CY0 − строка
 .row:
     mov     edi, SCR_W
 .px:
@@ -2767,7 +2818,7 @@ light_pass:
     dec     edi
     jnz     .px
     dec     ebx
-    cmp     ecx, SCR_W*SCR_H
+    cmp     ecx, [rsp]
     jb      .row
     jmp     .out
 .emissive:
@@ -2778,7 +2829,7 @@ light_pass:
     mov     dword [r8 + rcx*4], 0
     jmp     .next
 .out:
-    inc     dword [frame_no]
+    add     rsp, 8
     pop     rbp
     pop     r15
     pop     r14
