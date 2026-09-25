@@ -21,6 +21,7 @@ render:
     lea     rcx, [prof_last]
     call    [QueryPerformanceCounter]
     call    cam_snap
+    call    grade_frame                 ; палитра кадра, глаз -> тоновая кривая (grade.inc)
     call    interior_frame              ; у каких изб видно нутро (interior.inc)
     call    build_ntab                  ; луна и небо по нормалям
     call    moon_grid                   ; облака
@@ -58,6 +59,7 @@ render:
     PROF    14
     call    beam_pass                   ; луч фонарика в снегу (lights.inc)
     call    draw_cones
+    call    draw_pillars                ; в мороз: столбы над фонарями, ореол (post.inc)
     PROF    15
     call    draw_parts
     call    draw_swing                  ; след лопаты — где она достаёт
@@ -65,8 +67,10 @@ render:
     call    draw_flakes
     PROF    17
     call    draw_frost                  ; иней по краям кадра, когда игрок мёрзнет
-    call    draw_hitboxes               ; F3
     PROF    6
+    call    grade_pass                  ; цвет кадра, замер для глаза (grade.inc)
+    PROF    20
+    call    draw_hitboxes               ; F3
     call    hud_build                   ; HUD — списком, рисует поток вывода (hud.inc)
     PROF    7
     add     rsp, 32
@@ -1444,7 +1448,15 @@ light_rows:
     jz      .nospark
     paddw   xmm4, xmm4                  ; искра на снегу
 .nospark:
-    ; тоновая кривая: пересвет плавно к 255
+    ; пересвет белеет: каждому каналу — доля сильнейшего сверх порога (grade.inc)
+    pshuflw xmm5, xmm4, 0xC9            ; G R B A
+    pmaxsw  xmm5, xmm4
+    pshuflw xmm6, xmm4, 0xD2            ; R B G A
+    pmaxsw  xmm5, xmm6
+    psubusw xmm5, [hl_k2]
+    pmulhuw xmm5, [hl_kk]
+    paddw   xmm4, xmm5
+    ; тоновая кривая (с экспозицией глаза): пересвет плавно к 255
     pminsw  xmm4, [w_2047]
     pextrw  eax, xmm4, 0
     mov     eax, [rsi + rax*4 + (tm_lut - albedo)]
@@ -1654,6 +1666,15 @@ draw_flakes:
     add     ecx, CY0 + 76
     and     ecx, 511
     sub     ecx, 76                     ; земля под снежинкой
+    ; ледяная пыль в мороз — не снежинка: искрит, где на неё падает свет
+    mov     rax, rsi
+    lea     rdx, [flakes]
+    sub     rax, rdx
+    shr     eax, 5
+    imul    eax, eax, 0x2545F491
+    shr     eax, 24
+    cmp     eax, [fr_dth]
+    jb      .dust
     cvttss2si edx, [rsi+8]
     mov     edi, ecx
     sub     edi, edx                    ; sy
@@ -1789,3 +1810,235 @@ draw_flakes:
     pop     rsi
     pop     rbx
     ret
+    ; ----- кристалл ледяной пыли: грань ловит свет на миг — (max(0, sin))^8 со своей
+    ; частотой; свет в точке — огни кадра (фонари, окна: (1 − d²/R²)²), конус фонарика,
+    ; бледно — луна. Пиксель — прибавкой, яркий — крестиком; что ближе к глазу, закрывает
+.dust:
+    ; висит ниже снега: высота ·0.3 (до ~100 px) — у ламп и в луче фонарика
+    movss   xmm10, [rsi + 8]
+    mulss   xmm10, [dd_zk]
+    cvttss2si edx, xmm10
+    mov     edi, ecx
+    sub     edi, edx                    ; sy
+    cmp     edi, SCR_H-1
+    jae     .n
+    lea     eax, [ebx - CX0]            ; a'
+    lea     r8d, [ecx - CY0]            ; b'
+    shl     r8d, 4
+    shl     eax, 3
+    mov     r9d, [camx]
+    add     r9d, eax
+    add     r9d, r8d                    ; wx
+    mov     r10d, [camy]
+    add     r10d, r8d
+    sub     r10d, eax                   ; wy
+    movss   xmm0, [rsi + 24]
+    mulss   xmm0, [f_7]
+    movss   xmm1, [rsi + 28]
+    mulss   xmm1, [dd_tw]
+    addss   xmm1, [dd_tw0]
+    mulss   xmm1, [wind_t]
+    addss   xmm0, xmm1
+    movss   [dd_t], xmm10
+    call    fsin
+    movss   xmm10, [dd_t]
+    maxss   xmm0, [f_0]
+    mulss   xmm0, xmm0
+    mulss   xmm0, xmm0
+    mulss   xmm0, xmm0
+    mulss   xmm0, xmm0                  ; ^16 — вспыхивает на миг
+    comiss  xmm0, [dd_eps]
+    jb      .n
+    movss   [dd_t], xmm0
+    cvtsi2ss xmm8, r9d                  ; точка: мир 8.8, высота px
+    cvtsi2ss xmm9, r10d
+    xorps   xmm11, xmm11                ; свет B, G, R
+    lea     r8, [al_buf]
+    mov     ecx, [n_al]
+.dl:
+    test    ecx, ecx
+    jz      .dfl
+    mov     eax, [r8 + AL_KIND]
+    movss   xmm5, [r8 + AL_IR2]
+    cmp     eax, LK_LAMP
+    je      .dl1
+    cmp     eax, LK_BROKEN
+    je      .dl1
+    cmp     eax, LK_WIN
+    jne     .dln
+    movss   xmm5, [r8 + AL_IRG]         ; окно — только у стекла
+.dl1:
+    movss   xmm0, xmm8
+    subss   xmm0, [r8 + AL_X]
+    mulss   xmm0, [dd_pxu]
+    mulss   xmm0, xmm0
+    movss   xmm1, xmm9
+    subss   xmm1, [r8 + AL_Y]
+    mulss   xmm1, [dd_pxu]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    movss   xmm1, xmm10
+    subss   xmm1, [r8 + AL_Z]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    mulss   xmm0, xmm5
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    comiss  xmm1, [f_0]
+    jbe     .dln
+    movaps  xmm0, xmm1
+    mulss   xmm1, xmm1
+    mulss   xmm1, xmm0                  ; (1 − d²/R²)³ — искрит у самой лампы
+    shufps  xmm1, xmm1, 0
+    movups  xmm0, [r8 + AL_COL]
+    mulps   xmm0, xmm1
+    addps   xmm11, xmm0
+.dln:
+    add     r8, AL_SZ
+    dec     ecx
+    jmp     .dl
+.dfl:
+    cmp     dword [dl_fon], 0
+    je      .dmoon
+    movss   xmm0, xmm8
+    subss   xmm0, [dl_sx]
+    mulss   xmm0, [dd_pxu]              ; от руки, px-единицы
+    movss   xmm1, xmm9
+    subss   xmm1, [dl_sy]
+    mulss   xmm1, [dd_pxu]
+    movss   xmm2, xmm10
+    subss   xmm2, [lt_handz]
+    movss   xmm3, xmm0
+    mulss   xmm3, [dl_ax]
+    movss   xmm4, xmm1
+    mulss   xmm4, [dl_ay]
+    addss   xmm3, xmm4
+    movss   xmm4, xmm2
+    mulss   xmm4, [dl_az]
+    addss   xmm3, xmm4                  ; s — вдоль оси луча
+    comiss  xmm3, [dd_smin]
+    jbe     .dmoon
+    comiss  xmm3, [dl_frc]
+    jae     .dmoon
+    mulss   xmm0, xmm0
+    mulss   xmm1, xmm1
+    mulss   xmm2, xmm2
+    addss   xmm0, xmm1
+    addss   xmm0, xmm2
+    movss   xmm4, xmm3
+    mulss   xmm4, xmm3
+    subss   xmm0, xmm4                  ; h² — от оси
+    movss   xmm1, xmm3
+    mulss   xmm1, [lt_btan]
+    mulss   xmm1, xmm1                  ; r² конуса
+    divss   xmm0, xmm1
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    comiss  xmm1, [f_0]
+    jbe     .dmoon
+    ; луч не прошёл сквозь стену: точка под кристаллом видна от игрока (losg)
+    mov     eax, r9d
+    sar     eax, 6
+    sub     eax, [gox]
+    cmp     eax, GW
+    jae     .dmoon
+    mov     edx, r10d
+    sar     edx, 6
+    sub     edx, [goy]
+    cmp     edx, GW
+    jae     .dmoon
+    imul    edx, edx, GW
+    add     eax, edx
+    lea     rdx, [losg]
+    cmp     byte [rdx + rax], 0
+    je      .dmoon
+    mulss   xmm1, xmm1
+    mulss   xmm4, [dd_fk]
+    addss   xmm4, [f_1]
+    divss   xmm1, xmm4
+    mulss   xmm1, [flash_i]
+    mulss   xmm1, [dd_fg]
+    shufps  xmm1, xmm1, 0
+    movups  xmm0, [dd_fcol]
+    mulps   xmm0, xmm1
+    addps   xmm11, xmm0
+.dmoon:
+    cvtsi2ss xmm0, dword [flk_moon]
+    mulss   xmm0, [dd_mg]
+    shufps  xmm0, xmm0, 0
+    mulps   xmm0, [dd_mcol]
+    addps   xmm11, xmm0
+    movss   xmm0, [dd_t]
+    mulss   xmm0, [dd_gain]
+    shufps  xmm0, xmm0, 0
+    mulps   xmm11, xmm0
+    cvttps2dq xmm11, xmm11
+    packssdw xmm11, xmm11
+    packuswb xmm11, xmm11
+    movd    eax, xmm11
+    test    eax, eax
+    jz      .n
+    imul    eax, edi, SCR_W
+    add     eax, ebx
+    lea     rdx, [gposb]
+    mov     ecx, [rdx + rax*4]
+    movzx   r8d, cx
+    shr     ecx, 16
+    add     ecx, r8d
+    lea     r8d, [r9d + r10d + 64]
+    cmp     ecx, r8d
+    jg      .n
+    movd    xmm0, [r14 + rax*4]
+    paddusb xmm0, xmm11
+    movd    [r14 + rax*4], xmm0
+    ; яркий — крестиком в полсилы
+    movd    ecx, xmm11
+    mov     edx, ecx
+    shr     edx, 8
+    and     edx, 255
+    shr     ecx, 16
+    and     ecx, 255
+    add     ecx, edx
+    cmp     ecx, 260
+    jb      .n
+    pxor    xmm1, xmm1
+    pavgb   xmm11, xmm1
+    movd    xmm0, [r14 + rax*4 + SCR_W*4]
+    paddusb xmm0, xmm11
+    movd    [r14 + rax*4 + SCR_W*4], xmm0
+    test    edi, edi
+    jz      .dc1
+    movd    xmm0, [r14 + rax*4 - SCR_W*4]
+    paddusb xmm0, xmm11
+    movd    [r14 + rax*4 - SCR_W*4], xmm0
+.dc1:
+    test    ebx, ebx
+    jz      .dc2
+    movd    xmm0, [r14 + rax*4 - 4]
+    paddusb xmm0, xmm11
+    movd    [r14 + rax*4 - 4], xmm0
+.dc2:
+    cmp     ebx, SCR_W - 1
+    jae     .n
+    movd    xmm0, [r14 + rax*4 + 4]
+    paddusb xmm0, xmm11
+    movd    [r14 + rax*4 + 4], xmm0
+    jmp     .n
+
+section .rdata
+align 16, db 0
+dd_fcol:    dd 0.82, 0.94, 1.0, 0.0     ; фонарик: B, G, R
+dd_mcol:    dd 1.0, 0.95, 0.85, 0.0     ; луна
+f_2400:     dd 2400.0
+dd_tw:      dd 1.3                      ; мерцание: 1.5..7.4 рад/с
+dd_tw0:     dd 1.5
+dd_eps:     dd 0.02
+dd_pxu:     dd 0.0766                   ; мир 8.8 -> px-единицы
+dd_smin:    dd 3.0
+dd_fk:      dd 2.5e-4                   ; затухание луча — вчетверо круче, чем в beam_pass
+dd_fg:      dd 420.0
+dd_mg:      dd 0.35
+dd_gain:    dd 1.3
+dd_zk:      dd 0.3
+
+section .text

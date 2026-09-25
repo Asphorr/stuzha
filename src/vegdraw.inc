@@ -146,10 +146,57 @@ draw_veg:
 .w:
     ; лампа не горит — стекло тёмное
     test    r10d, r10d
-    jns     .w1
+    jns     .rime
     cmp     dword [vd_off], 0
     je      .w1
     mov     r10d, 0x01383C44
+    jmp     .w1
+.rime:
+    ; иней на ветках растёт за мороз (rime_t): по краю силуэта (сосед слева, справа
+    ; или сверху пуст) — вдвое гуще, в глубине — вчетверо реже; постройки двора — без.
+    ; Какие пиксели — по хэшу пикселя картинки (не мерцает)
+    cmp     dword [rime_t], 0
+    je      .w1
+    lea     rbp, [vrs + NVAR*RS_SZ]
+    cmp     rbx, rbp
+    jae     .w1
+    push    rax
+    push    rcx
+    mov     r8d, [rime_t]
+    lea     ecx, [edi + ebx]
+    imul    ecx, ecx, 0x2545F491
+    mov     eax, ecx
+    shr     eax, 15
+    xor     ecx, eax
+    imul    ecx, ecx, 0x2C1B3C6D
+    shr     ecx, 24
+    mov     rbp, [rbx + RS_PX]
+    cmp     dword [rbp + rdi*4 - 4], 0
+    je      .rme
+    cmp     dword [rbp + rdi*4 + 4], 0
+    je      .rme
+    mov     eax, edi
+    sub     eax, [rbx + RS_W]
+    js      .rme
+    cmp     dword [rbp + rax*4], 0
+    je      .rme
+    mov     eax, r8d
+    shr     eax, 2
+    jmp     .rmt
+.rme:
+    lea     eax, [r8d + r8d]
+.rmt:
+    cmp     ecx, eax
+    jae     .rm9
+    mov     ebp, r10d
+    shr     ebp, 2
+    and     ebp, 0x003F3F3F
+    add     ebp, 0x00B1B5B7             ; (c + 3·иней)/4, иней ≈ (236, 242, 244)
+    and     r10d, 0xFF000000
+    or      r10d, ebp
+.rm9:
+    pop     rcx
+    pop     rax
 .w1:
     lea     r8, [albedo]
     mov     [r8 + rdx*4], r10d

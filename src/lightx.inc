@@ -19,7 +19,6 @@ lx_bw3:   db 6,7,6,7,6,7,6,7, 14,15,14,15,14,15,14,15, 6,7,6,7,6,7,6,7, 14,15,14
 lx_w255:  times 16 dw 255
 lx_wlmax: times 4 dw 1023, 1023, 1023, 255
 lx_w2047: times 16 dw 2047
-lx_wtmk:  times 16 dw TM_K
 lx_w64:   times 16 dw 64
 lx_w190:  times 16 dw 190
 lx_gray:  times 4 dw 1, 2, 1, 0
@@ -176,10 +175,20 @@ LX_SZ    equ 1088
     LXBC    ymm3, xmm3
     vpand   ymm3, ymm3, ymm2
     vpaddw  ymm2, ymm2, ymm3
+    ; пересвет белеет: каждому каналу — доля сильнейшего сверх порога (grade.inc)
+    vpshuflw ymm3, ymm2, 0xC9
+    vpshufhw ymm3, ymm3, 0xC9           ; G R B A
+    vpmaxsw ymm3, ymm3, ymm2
+    vpshuflw ymm4, ymm2, 0xD2
+    vpshufhw ymm4, ymm4, 0xD2           ; R B G A
+    vpmaxsw ymm3, ymm3, ymm4
+    vpsubusw ymm3, ymm3, [hl_k2]
+    vpmulhuw ymm3, ymm3, [hl_kk]
+    vpaddw  ymm2, ymm2, ymm3
     ; тоновая кривая: 16 слов -> два сбора по 8 двордов из tm_lut; до колена (≤ TM_K)
-    ; она — тождество, и если все 16 там, сборы не нужны
+    ; она — тождество (если глаз привык: E = 1), и если все 16 там, сборы не нужны
     vpminsw ymm2, ymm2, [lx_w2047]
-    vpcmpgtw ymm3, ymm2, [lx_wtmk]
+    vpcmpgtw ymm3, ymm2, [tm_thr]
     vptest  ymm3, ymm3
     jz      %%tmid
     vpmovzxwd ymm3, xmm2

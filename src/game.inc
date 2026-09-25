@@ -27,6 +27,7 @@ new_game:
     call    build_cmap
     call    calc_hmap                   ; до света: фонари бросают тени по высотам
     call    wind_init                   ; погода на ночь, заслоны ветру — по карте высот
+    call    grade_reset                 ; глаз привык к ночи
     call    calc_static_light
     call    dl_bake                     ; огни попиксельно: точки, окна, карты горизонта
     call    calc_ao
@@ -522,6 +523,7 @@ update_env:
     mov     [glint], eax
     call    update_sky
     call    update_roofs
+    call    grade_update                ; глаз привыкает к яркости кадра
     add     rsp, 40
     ret
 
@@ -1489,13 +1491,31 @@ update_flakes:
     movss   xmm0, [wnd_snow]
     mulss   xmm0, [f_1900]
     addss   xmm0, [f_500]
+    movss   xmm1, [frost_k]             ; в мороз — вся ледяная пыль
+    mulss   xmm1, [f_2400]
+    maxss   xmm0, xmm1
     cvttss2si ebx, xmm0
     mov     eax, NFLK
     cmp     ebx, eax
     cmova   ebx, eax
     mov     [flk_n], ebx
+    ; ледяная пыль вместо снежинок: те, у кого хэш номера меньше мороз·256
+    movss   xmm0, [frost_k]
+    mulss   xmm0, [f_256]
+    cvttss2si eax, xmm0
+    mov     [fr_dth], eax
     lea     rsi, [flakes]
 .l:
+    mov     rax, rsi
+    lea     rdx, [flakes]
+    sub     rax, rdx
+    shr     eax, 5
+    imul    eax, eax, 0x2545F491
+    shr     eax, 24
+    xor     ecx, ecx
+    cmp     eax, [fr_dth]
+    setb    cl
+    mov     [fl_dust], ecx
     ; земля под снежинкой -> мир (камера прошлого кадра)
     cvttss2si eax, [rsi]
     sub     eax, [cam_a]
@@ -1527,9 +1547,13 @@ update_flakes:
     mulss   xmm0, [f_wsv]
     movss   [fl_tu], xmm4
     movss   [fl_tv], xmm0
-    ; порхание 9 px/с в тишь, завихрения — до ~50
+    ; порхание 9 px/с в тишь, завихрения — до ~50 (пыль — втрое тише)
     mulss   xmm3, [f_70]
     addss   xmm3, [f_9]
+    cmp     dword [fl_dust], 0
+    je      .amp
+    mulss   xmm3, [f_0_35]
+.amp:
     movss   [fl_amp], xmm3
     movss   xmm0, [wind_t]
     mulss   xmm0, [f_1_7]
@@ -1587,6 +1611,10 @@ update_flakes:
     movss   [rsi + 4], xmm1
     movss   xmm0, [rsi + 12]
     mulss   xmm0, [dt]
+    cmp     dword [fl_dust], 0
+    je      .fall
+    mulss   xmm0, [f_0_06]              ; пыль почти висит
+.fall:
     movss   xmm2, [rsi + 8]
     subss   xmm2, xmm0
     comiss  xmm2, [f_0]

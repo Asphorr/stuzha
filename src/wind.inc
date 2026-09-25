@@ -48,6 +48,27 @@ wind_init:
     dec     edi
     jnz     .ev
 .fixed:
+    ; мороз — между концом метели и утренним ветерком: ясно, тихо, иней растёт
+    movss   xmm0, [wv_ev + 16]
+    movss   xmm1, [wv_ev + 20]
+    mulss   xmm1, [f_0_8]
+    addss   xmm0, xmm1                  ; метель кончилась
+    movss   xmm2, [wv_ev + 32]
+    movss   xmm3, [wv_ev + 36]
+    mulss   xmm3, [f_0_8]
+    subss   xmm2, xmm3                  ; потянуло ветерком
+    movaps  xmm1, xmm0
+    addss   xmm1, xmm2
+    mulss   xmm1, [f_0_5]
+    movss   [wv_fc], xmm1
+    subss   xmm2, xmm0
+    mulss   xmm2, [f_0_5]
+    addss   xmm2, [f_0_9]
+    maxss   xmm2, [f_0_6]
+    movss   [wv_fw], xmm2
+    mov     dword [rime_a], 0
+    mov     dword [rime_h], __float32__(99.0)
+    mov     dword [rime_t], 0
     call    wind_obst
     mov     dword [wsh_th], __float32__(99.0)
     mov     dword [pz_f1], 0
@@ -296,35 +317,16 @@ update_wind:
     movss   xmm0, [wind_t]
     addss   xmm0, [dt]
     movss   [wind_t], xmm0
-    ; ----- погода: час ночи -> средняя сила и снегопад (сумма «горбов» событий)
+    ; ----- погода: час ночи -> средняя сила, снегопад, мороз; иней
     movss   xmm0, [gtime]
     mulss   xmm0, [f_inv60]
     movss   [wv_h], xmm0
-    movss   xmm4, [f_wb0]
-    movss   xmm5, [f_sb0]
-    lea     rbx, [wv_ev]
-    mov     ecx, 3
-.ev:
-    movss   xmm0, [wv_h]
-    subss   xmm0, [rbx]
-    divss   xmm0, [rbx + 4]
-    mulss   xmm0, xmm0
-    movss   xmm1, [f_1]
-    subss   xmm1, xmm0
-    maxss   xmm1, [f_0]
-    mulss   xmm1, xmm1                  ; (1 − x²)²
-    movss   xmm0, xmm1
-    mulss   xmm0, [rbx + 8]
-    addss   xmm4, xmm0
-    mulss   xmm1, [rbx + 12]
-    addss   xmm5, xmm1
-    add     rbx, 16
-    dec     ecx
-    jnz     .ev
-    minss   xmm4, [f_1_2]
-    minss   xmm5, [f_1]
+    call    weather_at
     movss   [wnd_base], xmm4
     movss   [wnd_snow], xmm5
+    movss   [frost_k], xmm6
+    movss   xmm0, [wv_h]
+    call    rime_step
     ; ----- направление (куда дует): до метели −0.3 рад (с ЮЮВ), после +0.4 (с ЮЮЗ),
     ; и медленно гуляет ±7°
     movss   xmm0, [wv_h]
@@ -509,6 +511,9 @@ update_wind:
     subss   xmm0, [f_0_15]
     mulss   xmm0, [f_1_4]
     addss   xmm0, [f_1]
+    movss   xmm1, [frost_k]             ; и по ледяной пыли в мороз
+    mulss   xmm1, [f_0_9]
+    addss   xmm0, xmm1
     minss   xmm0, [f_2_2]
     movss   [cone_k], xmm0
     ; ----- затишье пересчитать, если ветер повернул больше чем на градус
@@ -523,6 +528,126 @@ update_wind:
 .nosh:
     add     rsp, 32
     pop     rbx
+    ret
+
+; xmm0 = час -> xmm4 = средняя сила ветра, xmm5 = снегопад (сумма «горбов» событий),
+; xmm6 = мороз 0..1: горб (1 − x²)² окна между метелью и утренним ветерком, плато —
+; sstep((горб − 0.15)·1.6); в мороз снег стихает совсем, ветер — до 0.22
+; (портит rcx, rdx, xmm0–3)
+weather_at:
+    movss   [wv_tmp], xmm0
+    movss   xmm4, [f_wb0]
+    movss   xmm5, [f_sb0]
+    lea     rdx, [wv_ev]
+    mov     ecx, 3
+.ev:
+    movss   xmm0, [wv_tmp]
+    subss   xmm0, [rdx]
+    divss   xmm0, [rdx + 4]
+    mulss   xmm0, xmm0
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    maxss   xmm1, [f_0]
+    mulss   xmm1, xmm1                  ; (1 − x²)²
+    movss   xmm0, xmm1
+    mulss   xmm0, [rdx + 8]
+    addss   xmm4, xmm0
+    mulss   xmm1, [rdx + 12]
+    addss   xmm5, xmm1
+    add     rdx, 16
+    dec     ecx
+    jnz     .ev
+    minss   xmm4, [f_1_2]
+    minss   xmm5, [f_1]
+    movss   xmm0, [wv_tmp]
+    subss   xmm0, [wv_fc]
+    divss   xmm0, [wv_fw]
+    mulss   xmm0, xmm0
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    maxss   xmm1, [f_0]
+    mulss   xmm1, xmm1
+    movaps  xmm0, xmm1
+    subss   xmm0, [f_0_15]
+    mulss   xmm0, [f_1_6]
+    call    sstep
+    movaps  xmm6, xmm0
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    mulss   xmm5, xmm1
+    mulss   xmm0, [fw_078]
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    mulss   xmm4, xmm1
+    ret
+
+; иней на ветках и проводах к часу xmm0: растёт в мороз (за час полного — 0.6), ветер
+; сильнее 0.3 сдувает; xmm4 = сила ветра, xmm6 = мороз (от weather_at). Порог для
+; draw_veg — rime_t
+rime_step:
+    movss   xmm1, [rime_h]
+    movss   [rime_h], xmm0
+    subss   xmm0, xmm1
+    maxss   xmm0, [f_0]
+    minss   xmm0, [f_0_1]               ; Δч
+    movaps  xmm1, xmm6
+    mulss   xmm1, [fw_rime]
+    movaps  xmm2, xmm4
+    subss   xmm2, [f_0_3]
+    maxss   xmm2, [f_0]
+    mulss   xmm2, [fw_rstrip]
+    subss   xmm1, xmm2
+    mulss   xmm1, xmm0
+    addss   xmm1, [rime_a]
+    CLAMP01 xmm1
+    movss   [rime_a], xmm1
+    mulss   xmm1, [fw_rime_t]
+    cvttss2si eax, xmm1
+    mov     [rime_t], eax
+    ; провода: из тёмного (0x56, 0x4C, 0x46) к инею (0xF0, 0xEC, 0xE8) на 0.75·иней
+    movss   xmm1, [rime_a]
+    mulss   xmm1, [fw_wr]
+    cvttss2si ecx, xmm1
+    mov     eax, 0xF0 - 0x56
+    imul    eax, ecx
+    shr     eax, 8
+    add     eax, 0x56
+    mov     edx, eax
+    mov     eax, 0xEC - 0x4C
+    imul    eax, ecx
+    shr     eax, 8
+    add     eax, 0x4C
+    shl     eax, 8
+    or      edx, eax
+    mov     eax, 0xE8 - 0x46
+    imul    eax, ecx
+    shr     eax, 8
+    add     eax, 0x46
+    shl     eax, 16
+    or      edx, eax
+    or      edx, 0x01000000
+    mov     [wr_alb], edx
+    ret
+
+; снимок: иней, наросший с 17:20 до часа снимка (шагами по 0.02 ч)
+rime_preroll:
+    sub     rsp, 40
+    movss   xmm0, [fw_rh0]
+    movss   [rime_h], xmm0
+.l:
+    movss   xmm0, [rime_h]
+    addss   xmm0, [fw_rstep]
+    movss   xmm1, [gtime]
+    mulss   xmm1, [f_inv60]
+    comiss  xmm0, xmm1
+    jae     .out
+    movss   [tmp_c], xmm0
+    call    weather_at
+    movss   xmm0, [tmp_c]
+    call    rime_step
+    jmp     .l
+.out:
+    add     rsp, 40
     ret
 
 ; xmm1 += xmm0 по модулю xmm2 (в [0, xmm2))
@@ -1600,7 +1725,12 @@ wind_text:
 .ns2:
     movss   xmm0, [wnd_snow]
     comiss  xmm0, [f_0_45]
+    jae     .snow
+    movss   xmm0, [frost_k]
+    comiss  xmm0, [f_0_5]
     jb      .done
+    lea     rsi, [s_frost]
+    jmp     .put
 .snow:
     lea     rsi, [s_snowing]
 .put:

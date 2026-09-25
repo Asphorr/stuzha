@@ -165,7 +165,7 @@ bloom_add:
     mov     [rsp + BL_ROWSZ], edx       ; конец диапазона
     mov     r12d, ecx                   ; y
     mov     r8, [fbbits]
-    movdqa  xmm11, [bl_gain]
+    movdqa  xmm11, [bl_gainv]           ; с халацией — по палитре (grade.inc)
     movdqa  xmm10, [w_400]
     mov     rbx, rsp                    ; строка блума
     lea     r15, [bl_wt]
@@ -493,6 +493,305 @@ draw_cones:
     pop     rbx
     ret
 
+; ---------------------------------------------------------------- световые столбы
+; В ясный тихий мороз (frost_k) в воздухе висят ледяные пластинки: плашмя они ловят
+; свет фонаря и тянут над ним узкий столб — к верху тает, по высоте мерцает; вокруг
+; лампы — мягкий ореол и бледное кольцо. Складывается с кадром до цвета (grade.inc);
+; что ближе к глазу (x + y в G-буфере больше), то закрывает
+PL_H        equ 170                     ; высота столба, px
+PL_COL      equ 32                      ; цвет (B, G, R, 0), с силой мороза
+PL_SX       equ 48                      ; лампа на экране, f32
+PL_SY       equ 52
+PL_FX       equ 56                      ; доля x внутри пикселя
+PL_KEY      equ 60                      ; x + y лампы, мир 8.8
+PL_IX       equ 64                      ; пиксель лампы
+PL_IY       equ 68
+PL_E        equ 72                      ; e^(−h/55)
+PL_A        equ 76                      ; сила строки
+PL_IW       equ 80                      ; 1 / полуширина строки
+draw_pillars:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+    sub     rsp, 88
+    movss   xmm0, [frost_k]
+    comiss  xmm0, [f_0_03]
+    jb      .out
+    movss   xmm0, [lamp_t]
+    comiss  xmm0, [f_0_05]
+    jb      .out
+    mov     r14, [fbbits]
+    lea     rsi, [gposb]
+    lea     rbx, [lights]
+    mov     r15d, [nlights]
+.l:
+    test    r15d, r15d
+    jz      .out
+    mov     eax, [rbx + L_KIND]
+    movups  xmm7, [col_lamp]
+    cmp     eax, LK_LAMP
+    jne     .lb
+    movups  xmm0, [lampf_vec]
+    jmp     .lc
+.lb:
+    cmp     eax, LK_BROKEN
+    jne     .n
+    movups  xmm0, [lampb_vec]
+.lc:
+    mulps   xmm7, xmm0
+    movss   xmm0, [frost_k]
+    mulss   xmm0, [pl_gain]
+    shufps  xmm0, xmm0, 0
+    mulps   xmm7, xmm0
+    movaps  [rsp + PL_COL], xmm7
+    movhlps xmm0, xmm7
+    comiss  xmm0, [f_2]                 ; красный слабее двух — нечего рисовать
+    jb      .n
+    ; лампа на экране: над точкой фонаря на высоте стекла
+    movss   xmm0, [rbx + L_X]
+    mulss   xmm0, [f_256]
+    movss   xmm1, [rbx + L_Y]
+    mulss   xmm1, [f_256]
+    movaps  xmm2, xmm0
+    addss   xmm2, xmm1
+    cvttss2si eax, xmm2
+    add     eax, 64
+    mov     [rsp + PL_KEY], eax
+    cvtsi2ss xmm2, dword [camx]
+    subss   xmm0, xmm2
+    cvtsi2ss xmm2, dword [camy]
+    subss   xmm1, xmm2
+    movaps  xmm2, xmm0
+    subss   xmm2, xmm1
+    mulss   xmm2, [f_inv16]
+    addss   xmm2, [lt_cx0]
+    movss   [rsp + PL_SX], xmm2
+    addss   xmm0, xmm1
+    mulss   xmm0, [f_inv32]
+    addss   xmm0, [lt_cy0]
+    subss   xmm0, [pl_z]
+    movss   [rsp + PL_SY], xmm0
+    comiss  xmm2, [pl_xm0]
+    jb      .n
+    comiss  xmm2, [pl_xm1]
+    ja      .n
+    comiss  xmm0, [pl_ym0]
+    jb      .n
+    comiss  xmm0, [pl_ym1]
+    ja      .n
+    cvttss2si eax, xmm2
+    mov     [rsp + PL_IX], eax
+    cvtsi2ss xmm1, eax
+    subss   xmm2, xmm1
+    movss   [rsp + PL_FX], xmm2
+    cvtss2si eax, xmm0
+    mov     [rsp + PL_IY], eax
+    ; ----- столб: строка h над лампой
+    mov     dword [rsp + PL_E], __float32__(1.0)
+    mov     r12d, 1
+.ph:
+    movss   xmm0, [rsp + PL_E]
+    mulss   xmm0, [pl_decay]
+    movss   [rsp + PL_E], xmm0
+    mov     edi, [rsp + PL_IY]
+    sub     edi, r12d                   ; строка
+    js      .halo
+    cmp     edi, SCR_H
+    jae     .phn
+    cmp     r12d, 4
+    jb      .phn
+    ; мерцание: два синуса по высоте, бегут медленно
+    cvtsi2ss xmm0, r12d
+    mulss   xmm0, [pl_f1]
+    movss   xmm1, [wind_t]
+    mulss   xmm1, [pl_w1]
+    addss   xmm0, xmm1
+    call    fsin
+    movss   [rsp + PL_A], xmm0
+    cvtsi2ss xmm0, r12d
+    mulss   xmm0, [pl_f2]
+    movss   xmm1, [wind_t]
+    mulss   xmm1, [pl_w2]
+    subss   xmm0, xmm1
+    call    fsin
+    addss   xmm0, [rsp + PL_A]
+    mulss   xmm0, [pl_sh]
+    addss   xmm0, [pl_s0]
+    mulss   xmm0, [rsp + PL_E]
+    lea     eax, [r12d - 3]
+    cvtsi2ss xmm1, eax
+    mulss   xmm1, [f_0_1]
+    minss   xmm1, [f_1]
+    mulss   xmm0, xmm1
+    mov     eax, PL_H                   ; верхние 40 px — на нет
+    sub     eax, r12d
+    cvtsi2ss xmm1, eax
+    mulss   xmm1, [pl_itop]
+    minss   xmm1, [f_1]
+    mulss   xmm0, xmm1
+    movss   [rsp + PL_A], xmm0
+    ; ширина: 0.9 + 0.012·h px, профиль (1 − u²)²
+    cvtsi2ss xmm0, r12d
+    mulss   xmm0, [pl_wk]
+    addss   xmm0, [pl_w0]
+    movss   xmm1, [f_1]
+    divss   xmm1, xmm0
+    movss   [rsp + PL_IW], xmm1
+    imul    edi, edi, SCR_W
+    mov     r13d, -5
+.px:
+    mov     eax, [rsp + PL_IX]
+    add     eax, r13d
+    cmp     eax, SCR_W
+    jae     .pxn
+    cvtsi2ss xmm0, r13d
+    addss   xmm0, [f_0_5]
+    subss   xmm0, [rsp + PL_FX]
+    mulss   xmm0, [rsp + PL_IW]
+    mulss   xmm0, xmm0
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    comiss  xmm1, [f_0]
+    jbe     .pxn
+    mulss   xmm1, xmm1
+    mulss   xmm1, [rsp + PL_A]
+    add     eax, edi
+    call    .add
+.pxn:
+    inc     r13d
+    cmp     r13d, 5
+    jle     .px
+.phn:
+    inc     r12d
+    cmp     r12d, PL_H
+    jb      .ph
+    ; ----- ореол: мягкий диск (R 15) и бледное кольцо (r 21)
+.halo:
+    mov     r12d, -25
+.hy:
+    mov     edi, [rsp + PL_IY]
+    add     edi, r12d
+    cmp     edi, SCR_H
+    jae     .hyn
+    imul    edi, edi, SCR_W
+    mov     r13d, -25
+.hx:
+    mov     eax, [rsp + PL_IX]
+    add     eax, r13d
+    cmp     eax, SCR_W
+    jae     .hxn
+    cvtsi2ss xmm0, r13d
+    addss   xmm0, [f_0_5]
+    subss   xmm0, [rsp + PL_FX]
+    mulss   xmm0, xmm0
+    cvtsi2ss xmm2, r12d
+    mulss   xmm2, xmm2
+    addss   xmm0, xmm2                  ; r²
+    comiss  xmm0, [pl_rout]             ; дальше кольца — пусто
+    jae     .hxn
+    comiss  xmm0, [pl_rdisk]            ; между диском и кольцом — пусто
+    jb      .hin
+    comiss  xmm0, [pl_rin]
+    jb      .hxn
+.hin:
+    movaps  xmm3, xmm0
+    mulss   xmm0, [pl_ig2]
+    movss   xmm1, [f_1]
+    subss   xmm1, xmm0
+    maxss   xmm1, [f_0]
+    mulss   xmm1, xmm1
+    mulss   xmm1, [pl_ag]               ; диск
+    sqrtss  xmm3, xmm3
+    subss   xmm3, [pl_r0]
+    mulss   xmm3, [pl_irw]
+    mulss   xmm3, xmm3
+    movss   xmm2, [f_1]
+    subss   xmm2, xmm3
+    maxss   xmm2, [f_0]
+    mulss   xmm2, xmm2
+    mulss   xmm2, [pl_ar]               ; кольцо
+    addss   xmm1, xmm2
+    comiss  xmm1, [pl_eps]
+    jb      .hxn
+    add     eax, edi
+    call    .add
+.hxn:
+    inc     r13d
+    cmp     r13d, 25
+    jle     .hx
+.hyn:
+    inc     r12d
+    cmp     r12d, 25
+    jle     .hy
+.n:
+    add     rbx, L_SZ
+    dec     r15d
+    jmp     .l
+.out:
+    add     rsp, 88
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+; пиксель eax += цвет·xmm1, если ничто не ближе к глазу (портит ecx, edx, xmm0, xmm1)
+.add:
+    mov     ecx, [rsi + rax*4]
+    movzx   edx, cx
+    shr     ecx, 16
+    add     ecx, edx
+    cmp     ecx, [rsp + 8 + PL_KEY]
+    jg      .ar
+    shufps  xmm1, xmm1, 0
+    mulps   xmm1, [rsp + 8 + PL_COL]
+    cvttps2dq xmm1, xmm1
+    packssdw xmm1, xmm1
+    packuswb xmm1, xmm1
+    movd    xmm0, [r14 + rax*4]
+    paddusb xmm0, xmm1
+    movd    [r14 + rax*4], xmm0
+.ar:
+    ret
+
+section .rdata
+align 4, db 0
+pl_gain:    dd 0.95                     ; цвет фонаря (0..190) -> прибавка к кадру
+pl_itop:    dd 0.025                    ; 1/40
+pl_z:       dd 40.0                     ; стекло над снегом, px
+pl_xm0:     dd -40.0                    ; лампа на экране: с запасом на ореол и столб
+pl_xm1:     dd 680.0
+pl_ym0:     dd -30.0
+pl_ym1:     dd 510.0
+pl_decay:   dd 0.98895                  ; e^(−1/90): к верху тает
+pl_f1:      dd 0.31                     ; мерцание по высоте
+pl_w1:      dd 0.9
+pl_f2:      dd 0.117
+pl_w2:      dd 0.53
+pl_sh:      dd 0.11
+pl_s0:      dd 0.78
+pl_w0:      dd 1.7                      ; полуширина: у лампы, прирост на px высоты
+pl_wk:      dd 0.016
+pl_ig2:     dd 0.0044444                ; ореол: 1/15²
+pl_ag:      dd 0.33
+pl_r0:      dd 22.0                     ; кольцо: радиус, 1/полуширина, сила
+pl_irw:     dd 0.35
+pl_ar:      dd 0.045
+pl_eps:     dd 0.004
+pl_rdisk:   dd 225.0                    ; 15²
+pl_rin:     dd 366.0                    ; (22 − 2.86)²
+pl_rout:    dd 618.0                    ; (22 + 2.86)²
+
+section .text
+
 ; ---------------------------------------------------------------- провода
 ; соседние фонари одной линии, не дальше 17 тайлов
 gen_wires:
@@ -755,13 +1054,33 @@ draw_wires:
     cmp     ecx, r8d
     jg      .sn
     lea     rcx, [albedo]
-    mov     dword [rcx + rax*4], 0x01464C56
+    mov     r8d, [wr_alb]               ; в инее — белее (rime_step)
+    mov     [rcx + rax*4], r8d
     lea     rcx, [nbuf]
     mov     byte [rcx + rax], N_UP
     mov     ecx, edi
     shl     ecx, 16
     or      ecx, esi
     mov     [rdx + rax*4], ecx
+    ; густой иней — провод толще: ещё пиксель сверху
+    cmp     dword [rime_t], 60
+    jb      .sn
+    cmp     eax, SCR_W
+    jb      .sn
+    sub     eax, SCR_W
+    mov     r9d, [rdx + rax*4]
+    movzx   r8d, r9w
+    shr     r9d, 16
+    add     r9d, r8d
+    lea     r8d, [esi + edi + 64]
+    cmp     r9d, r8d
+    jg      .sn
+    mov     [rdx + rax*4], ecx
+    lea     r9, [albedo]
+    mov     r8d, [wr_alb]
+    mov     [r9 + rax*4], r8d
+    lea     r9, [nbuf]
+    mov     byte [r9 + rax], N_UP
 .sn:
     inc     ebp
     jmp     .s

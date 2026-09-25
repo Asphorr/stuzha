@@ -140,6 +140,11 @@ update_sky:
     subss   xmm2, xmm0
     mulss   xmm2, xmm1
     addss   xmm0, xmm2
+    movss   xmm1, [frost_k]             ; в мороз небо чистое
+    mulss   xmm1, [f_0_85]
+    movss   xmm2, [f_1]
+    subss   xmm2, xmm1
+    mulss   xmm0, xmm2
     movss   [sk_cover], xmm0
     ; таблица ослабления: шум n -> 255·(1 − cover·sstep((n/255 − 0.35)·2.5))
     lea     rdx, [cl_tab]

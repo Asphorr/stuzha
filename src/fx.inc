@@ -160,6 +160,9 @@ emit_smoke:
     movss   xmm1, [sm_s]
     mulss   xmm1, [f_2_5]
     addss   xmm1, [f_1]
+    movss   xmm2, [frost_k]             ; в мороз печи топят жарче — гуще
+    mulss   xmm2, [f_0_6]
+    addss   xmm1, xmm2
     mulss   xmm1, [dt]
     mulss   xmm1, [f_9]                 ; ~9 клубов в секунду, в ветер — до 3.5 раза чаще
     comiss  xmm0, xmm1
@@ -200,6 +203,10 @@ emit_smoke:
     call    randf
     mulss   xmm0, [f_2]
     addss   xmm0, [f_5]
+    movss   xmm1, [frost_k]             ; в мороз столб выше: живёт до 1.8 раза дольше
+    mulss   xmm1, [f_0_8]
+    addss   xmm1, [f_1]
+    mulss   xmm0, xmm1
     movss   [np + P_LIFE], xmm0
     mov     byte [np + P_KIND], PK_SMOKE
     call    rand
@@ -211,8 +218,13 @@ emit_smoke:
     cmp     eax, ecx
     cmova   eax, ecx
     mov     [np + P_WS], al
+    movss   xmm0, [frost_k]
+    mulss   xmm0, [f_255]
+    cvttss2si eax, xmm0
+    mov     [np + P_FR], al
     call    spawn_part
     mov     byte [np + P_WS], 0
+    mov     byte [np + P_FR], 0
 .n:
     add     rsi, 2
     dec     ebx
@@ -520,6 +532,40 @@ update_parts:
     subss   xmm0, xmm4
     maxss   xmm0, [f_0]
     mulss   xmm3, xmm0
+    ; мороз: над слоем инверсии (88..119 px) дым не поднимается, а расползается
+    movss   xmm0, [frost_k]
+    comiss  xmm0, [f_0_05]
+    jb      .move
+    movzx   eax, byte [rbx + P_SEED]
+    mov     ecx, eax
+    and     ecx, 31
+    add     ecx, 88
+    cvtsi2ss xmm4, ecx
+    comiss  xmm4, [rbx + P_Z]
+    jae     .move
+    movss   xmm4, xmm7
+    mulss   xmm4, [f_4]
+    mulss   xmm4, xmm0
+    movss   xmm5, [f_1]
+    subss   xmm5, xmm4
+    maxss   xmm5, [f_0]
+    mulss   xmm3, xmm5                  ; вверх — стихает
+    mulss   xmm0, [sm_spr]              ; вбок — к своей стороне (по номеру), тайлы/с
+    mov     ecx, eax
+    and     ecx, 15
+    cvtsi2ss xmm4, ecx
+    subss   xmm4, [lt_7_5]
+    mulss   xmm4, xmm0
+    subss   xmm4, xmm1
+    mulss   xmm4, xmm7
+    addss   xmm1, xmm4
+    shr     eax, 4
+    cvtsi2ss xmm4, eax
+    subss   xmm4, [lt_7_5]
+    mulss   xmm4, xmm0
+    subss   xmm4, xmm2
+    mulss   xmm4, xmm7
+    addss   xmm2, xmm4
     jmp     .move
 .puff:
     movss   xmm4, xmm7
@@ -883,10 +929,20 @@ draw_parts:
     addss   xmm1, [f_1]
     jmp     .kset
 .ksmoke:
-    ; дым серый, светит небом
+    ; дым серый, светит небом; выпущенный в мороз — белее (пар), живёт дольше: жизнь
+    ; приводим к обычной (/(1 + 0.8·мороз)), клуб шире (·(1 + 0.5·мороз))
     mov     r8d, [sky_b]
     or      r8d, 0xFF000000
-    mov     r14d, 200
+    movzx   eax, byte [rbx + P_FR]
+    cvtsi2ss xmm3, eax
+    mulss   xmm3, [f_inv255]
+    movss   [dp_fr], xmm3
+    mulss   xmm3, [f_0_8]
+    addss   xmm3, [f_1]
+    divss   xmm2, xmm3
+    imul    eax, eax, 30
+    shr     eax, 8
+    lea     r14d, [eax + 200]
     movss   xmm0, xmm2
     mulss   xmm0, [f_0_4]
     minss   xmm0, [f_1]                 ; тает к концу жизни
@@ -914,6 +970,10 @@ draw_parts:
     subss   xmm4, xmm3
     maxss   xmm4, [f_0_4]
     mulss   xmm0, xmm4
+    movss   xmm4, [dp_fr]
+    mulss   xmm4, [f_0_5]
+    addss   xmm4, [f_1]
+    mulss   xmm1, xmm4
 .kset:
     ; видимость (дым над крышами виден и из «памяти»)
     mov     eax, r8d

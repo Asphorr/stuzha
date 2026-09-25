@@ -323,45 +323,9 @@ dl_init:
     push    rdi
     push    r12
     sub     rsp, 40
-    ; ----- тоновая кривая: до колена как есть, выше K + S·(1 − e^(−(x − K)/S))
-    lea     rdi, [tm_lut]
-    xor     ebx, ebx
-.tm:
-    mov     eax, ebx
-    cmp     ebx, TM_K
-    jbe     .tms
-    cvtsi2ss xmm0, ebx
-    subss   xmm0, [lt_tmk]
-    mulss   xmm0, [lt_tmis]             ; t
-    movss   xmm2, [f_1]
-    addss   xmm2, xmm0                  ; e^t ≈ 1 + t + t²/2 + t³/6 + t⁴/24
-    movaps  xmm3, xmm0
-    mulss   xmm3, xmm0
-    movaps  xmm4, xmm3
-    mulss   xmm4, [f_0_5]
-    addss   xmm2, xmm4
-    mulss   xmm3, xmm0
-    movaps  xmm4, xmm3
-    mulss   xmm4, [lt_inv6]
-    addss   xmm2, xmm4
-    mulss   xmm3, xmm0
-    mulss   xmm3, [lt_inv24]
-    addss   xmm2, xmm3
-    movss   xmm1, [f_1]
-    divss   xmm1, xmm2
+    ; ----- тоновая кривая без поправки глаза (grade.inc)
     movss   xmm0, [f_1]
-    subss   xmm0, xmm1
-    mulss   xmm0, [lt_tms]
-    addss   xmm0, [lt_tmk]
-    cvtss2si eax, xmm0
-    mov     ecx, 255
-    cmp     eax, ecx
-    cmova   eax, ecx
-.tms:
-    mov     [rdi + rbx*4], eax
-    inc     ebx
-    cmp     ebx, TM_N
-    jb      .tm
+    call    tm_build
     ; ----- по нормали: обёртка, 1 / (1 + обёртка), отсвет снега, сдвиг выборки тени
     ; (msd·256: 8.8 на единичный вектор к огню)
     lea     rsi, [lt_nwrap]

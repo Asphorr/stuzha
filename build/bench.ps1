@@ -5,9 +5,9 @@ param([string]$n = "1", [int]$runs = 1, [switch]$fs, [string]$exe = "stuzha.exe"
 # 10 — поток вывода (растяжка под окно + HUD + окно, идёт параллельно; 13 и 19 — первые
 # две части), 11 — весь кадр, 12..19 — части
 $names = @{ 12 = "ntab+moon"; 1 = "lightgrid+dl"; 2 = "floor"; 3 = "objs+roofs"; 4 = "(band max)"; 0 = "wires+wait"; 18 = "(sky bg)"; 5 = "light+tiles";
-            14 = "  bloom"; 15 = "  beam+cones"; 16 = "  parts"; 17 = "  flakes"; 6 = "  frost+hb"; 7 = "hud list"; 8 = "handoff"; 9 = "update"; 10 = "(output bg)";
-            13 = "  scale"; 19 = "  hud draw" }
-$order = 12, 1, 2, 3, 4, 18, 0, 5, 14, 15, 16, 17, 6, -2, 7, 8, 9, 10, 13, 19
+            14 = "  bloom"; 15 = "  beam+cones"; 16 = "  parts"; 17 = "  flakes"; 6 = "  frost"; 20 = "  grade"; 7 = "hb+hud list"; 8 = "handoff"; 9 = "update";
+            10 = "(output bg)"; 13 = "  scale"; 19 = "  hud draw" }
+$order = 12, 1, 2, 3, 4, 18, 0, 5, 14, 15, 16, 17, 6, 20, -2, 7, 8, 9, 10, 13, 19
 $rows = [System.Collections.Generic.List[double[]]]::new()
 Push-Location $PSScriptRoot
 for ($r = 0; $r -lt $runs; $r++) {
@@ -19,8 +19,8 @@ for ($r = 0; $r -lt $runs; $r++) {
   $cnt = [BitConverter]::ToInt32($d, 0); $ns = [BitConverter]::ToInt32($d, 4); $q = [BitConverter]::ToInt64($d, 8)
   for ($f = $skip; $f -lt $cnt; $f++) {
     $row = [double[]]::new(26)
-    for ($i = 0; $i -lt $ns; $i++) { $row[$i] = [BitConverter]::ToInt64($d, 16 + ($f * $ns + $i) * 8) * 1000.0 / $q }    $row[21] = $row[6] + $row[14] + $row[15] + $row[16] + $row[17]              # post
-    $row[22] = 0; foreach ($i in 0..3 + 5..7 + 12 + 14..17) { $row[22] += $row[$i] } # render (без фоновых и частей задания)
+    for ($i = 0; $i -lt $ns; $i++) { $row[$i] = [BitConverter]::ToInt64($d, 16 + ($f * $ns + $i) * 8) * 1000.0 / $q }    $row[21] = $row[6] + $row[14] + $row[15] + $row[16] + $row[17] + $row[20]   # post
+    $row[22] = 0; foreach ($i in 0..3 + 5..7 + 12 + 14..17 + 20) { $row[22] += $row[$i] } # render (без фоновых и частей задания)
     $row[23] = $row[11]                                                         # frame
     $rows.Add($row)
   }

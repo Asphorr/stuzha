@@ -128,6 +128,7 @@ P_LIFE      equ 24
 P_KIND      equ 28
 P_SEED      equ 29
 P_WS        equ 30                  ; дым: сила ветра при выпуске ·100
+P_FR        equ 31                  ; дым: мороз при выпуске ·255 (живёт дольше)
 PK_BREATH   equ 1
 PK_SMOKE    equ 2
 PK_PUFF     equ 3

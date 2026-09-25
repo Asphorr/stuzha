@@ -139,6 +139,8 @@ run_shot:
     je      .s12
     cmp     eax, 13
     je      .s13
+    cmp     eax, 14
+    je      .s14
     cmp     eax, 7
     je      .s7
     cmp     eax, 8
@@ -255,6 +257,13 @@ run_shot:
     mov     dword [my], 150
     lea     rax, [shot_zoffz]
     mov     [shot_ztab], rax
+    jmp     .zomb
+.s14:
+    ; f (14): 04:15, ясный тихий мороз — столбы над фонарями, алмазная пыль в луче, иней
+    mov     dword [gtime], __float32__(1695.0)
+    mov     dword [pl_flash], 1
+    mov     dword [mx], 470
+    mov     dword [my], 110
 .zomb:
     ; --wav: вплотную зомби — только где они и нужны (бой, смерть, нюх); в остальных
     ; снимках слушаем место, а не драку за 15 с
@@ -275,6 +284,7 @@ run_shot:
     call    shot_place_zombies
 .placed:
     mov     dword [elapsed], __float32__(10.0)
+    call    rime_preroll                ; иней, наросший к часу снимка
     ; прогрев частиц: дым, пар, снег с веток
     mov     ebx, 150
 .warm:
@@ -417,6 +427,38 @@ run_shot:
     mov     rcx, rbx
     call    [CloseHandle]
 .nozl:
+    ; цвет кадра: экспозиция, замер, мороз, иней, палитра -> grade.bin
+    lea     rcx, [s_gradename]
+    mov     edx, 0x40000000
+    xor     r8d, r8d
+    xor     r9d, r9d
+    mov     qword [rsp+32], 2
+    mov     qword [rsp+40], 0x80
+    mov     qword [rsp+48], 0
+    call    [CreateFileW]
+    mov     rbx, rax
+    mov     eax, [ex_e]
+    mov     [gd_dump], eax
+    mov     eax, [ex_meter]
+    mov     [gd_dump + 4], eax
+    mov     eax, [frost_k]
+    mov     [gd_dump + 8], eax
+    mov     eax, [rime_a]
+    mov     [gd_dump + 12], eax
+    mov     rcx, rbx
+    lea     rdx, [gd_dump]
+    mov     r8d, 16
+    lea     r9, [written]
+    mov     qword [rsp+32], 0
+    call    [WriteFile]
+    mov     rcx, rbx
+    lea     rdx, [gd_par]
+    mov     r8d, GP_SZ
+    lea     r9, [written]
+    mov     qword [rsp+32], 0
+    call    [WriteFile]
+    mov     rcx, rbx
+    call    [CloseHandle]
     cmp     dword [dbg_intro], 0
     je      .noin
     mov     dword [elapsed], __float32__(3.0)   ; заставка видна первые 7 с
@@ -838,8 +880,12 @@ save_bmp:
     mov     eax, 'b'
 .nm2:
     cmp     ecx, '0' + 13
-    jne     .nm
+    jne     .nm3
     mov     eax, 'z'
+.nm3:
+    cmp     ecx, '0' + 14
+    jne     .nm
+    mov     eax, 'f'
 .nm:
     mov     [s_shotname+8], ax
     lea     rcx, [s_shotname]
@@ -1089,8 +1135,13 @@ parse_cmdline:
     jmp     .dig
 .nz:
     cmp     ecx, 'z'
-    jne     .n0
+    jne     .nf
     mov     ecx, 12                     ; --shotz = 13: проверка нюха (+ zlog.bin)
+    jmp     .dig
+.nf:
+    cmp     ecx, 'f'
+    jne     .n0
+    mov     ecx, 13                     ; --shotf = 14: мороз
     jmp     .dig
 .n0:
     sub     ecx, '1'
@@ -1673,6 +1724,7 @@ wput_clock:
 %include "roof.inc"
 %include "snow.inc"
 %include "post.inc"
+%include "grade.inc"                    ; цвет кадра: палитры, ночное зрение, глаз
 %include "lights.inc"
 %include "lightx.inc"                   ; после lights.inc: dl_row8 берёт его AL_*, константы
 %include "hud.inc"
