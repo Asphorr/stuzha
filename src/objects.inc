@@ -222,14 +222,13 @@ draw_tile:
     sar     r8d, 5
     add     r8d, CY0
     mov     [bk_sy], r8d
-    ; растения — объёмные картинки (vegdraw.inc), у них свои рамки на экране
-    mov     r9d, [bk_kind]
-    cmp     r9d, D_SPRUCE
-    je      .veg
-    cmp     r9d, D_BIRCH
-    je      .veg
-    cmp     r9d, D_PINE
-    jae     .veg
+    ; растения и мелочи двора — объёмные картинки (vegdraw.inc), у них свои рамки
+    mov     r9d, edx
+    shl     r9d, 7
+    add     r9d, ecx
+    lea     r10, [vmap]
+    cmp     byte [r10 + r9*2], 0
+    jne     .veg
     cmp     eax, -40
     jl      .out
     cmp     eax, SCR_W + 40
@@ -628,8 +627,12 @@ draw_tile:
     cvtss2si eax, xmm0
     mov     [img_sway], eax
 .vns:
-    ; просвечивает, если заслоняет игрока
+    ; просвечивает, если заслоняет игрока (растение; мелочи двора — нет)
     mov     dword [vd_dith], 0
+    mov     dword [vd_off], 0
+    lea     rax, [vrs + NVAR*RS_SZ]
+    cmp     rbx, rax
+    jae     .vpr
     cmp     r12d, 1
     jl      .vnd
     cmp     r12d, 10
@@ -639,9 +642,41 @@ draw_tile:
     cmp     r13d, eax
     jg      .vnd
     mov     dword [vd_dith], 1
+    jmp     .vnd
+.vpr:
+    ; фонарь: лампа не горит днём и у сломанного в тёмные мгновения
+    cmp     dword [bk_kind], D_LAMP
+    jne     .vnd
+    movss   xmm0, [lamp_t]
+    mov     eax, [bk_tx]
+    cmp     eax, [brk_x]
+    jne     .vl1
+    mov     eax, [bk_ty]
+    cmp     eax, [brk_y]
+    jne     .vl1
+    mulss   xmm0, [brk_lvl]
+.vl1:
+    comiss  xmm0, [f_0_3]
+    jae     .vnd
+    mov     dword [vd_off], 1
 .vnd:
     call    draw_veg
     mov     dword [img_sway], 0
+    cmp     dword [bk_kind], D_LINE
+    jne     .out
+    ; бельё на верёвке — картинкой поверх, треплется на ветру
+    mov     dword [bk_dith], 0
+    mov     eax, [bk_tx]
+    shl     eax, 8
+    add     eax, 150
+    mov     edx, [bk_ty]
+    shl     edx, 8
+    add     edx, 158
+    shl     edx, 16
+    or      eax, edx
+    mov     [cm_gpos], eax
+    mov     dword [img_nb], N_BL
+    jmp     .laundry
 .out:
     add     rsp, 32
     pop     r13

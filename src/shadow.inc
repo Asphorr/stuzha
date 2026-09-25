@@ -43,6 +43,10 @@ calc_hmap:
     movzx   eax, byte [rdx + r14]
     test    eax, eax
     jnz     .house
+    ; растения и мелочи двора — своими картами высот с моделей (veg_hmap, в конце)
+    lea     rdx, [vmap]
+    cmp     byte [rdx + r14*2], 0
+    jne     .next
     lea     rdx, [tmap]
     movzx   ebx, byte [rdx + r14]       ; вид
     lea     rdx, [th_m]

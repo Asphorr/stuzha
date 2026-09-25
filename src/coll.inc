@@ -24,12 +24,12 @@ build_cmap:
     movzx   r12d, byte [r8 + rax]
     ; растение: ствол там, где основание (сдвиг из vmap), радиус — по породе
     ; (куст насквозь — набора нет вовсе, как у tcol)
-    test    r12d, r12d
-    jz      .put
     lea     r8, [tsp]
     movzx   ecx, byte [r8 + rax]
     cmp     ecx, 0xFF
     je      .nveg
+    test    r12d, r12d
+    jz      .put
     imul    r12d, ecx, 9
     mov     edx, esi
     shl     edx, 7
@@ -40,41 +40,28 @@ build_cmap:
     lea     r12d, [r12d + edx + CS_V0]
     jmp     .put
 .nveg:
+    cmp     eax, T_BENCH
+    jne     .nb
+    ; лавочка вдоль y — зеркало модели (prop_assign)
+    mov     edx, esi
+    shl     edx, 7
+    add     edx, ebx
+    lea     r8, [vmap]
+    test    byte [r8 + rdx*2 + 1], 0x80
+    jz      .put
+    mov     r12d, CS_BENCHY
+    jmp     .put
+.nb:
     cmp     eax, T_FENCE
     jne     .put
-    ; вдоль x, если сосед слева или справа — забор; вдоль y — сверху или снизу
-    xor     r12d, r12d
-    lea     ecx, [ebx - 1]
-    mov     edx, esi
-    call    get_tile
-    cmp     eax, T_FENCE
-    je      .fx
-    lea     ecx, [ebx + 1]
-    mov     edx, esi
-    call    get_tile
-    cmp     eax, T_FENCE
-    jne     .fy
-.fx:
-    or      r12d, 1
-.fy:
+    ; прясла по кромкам, как их рисует модель (fence_edges): +y, +x, обе; нет — столб
     mov     ecx, ebx
-    lea     edx, [esi - 1]
-    call    get_tile
-    cmp     eax, T_FENCE
-    je      .fyy
-    mov     ecx, ebx
-    lea     edx, [esi + 1]
-    call    get_tile
-    cmp     eax, T_FENCE
-    jne     .fz
-.fyy:
-    or      r12d, 2
-.fz:
-    test    r12d, r12d
-    jnz     .fset
-    mov     r12d, 3
-.fset:
-    add     r12d, CS_FY - 1             ; 1 -> CS_FY, 2 -> CS_FX, 3 -> CS_FXY
+    mov     edx, esi
+    call    fence_edges
+    mov     r12d, CS_FPOST
+    test    eax, eax
+    jz      .put
+    lea     r12d, [eax + CS_FY - 1]     ; 1 -> CS_FY, 2 -> CS_FX, 3 -> CS_FXY
 .put:
     mov     eax, esi
     shl     eax, 7
@@ -88,6 +75,73 @@ build_cmap:
     jb      .y
     add     rsp, 40
     pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; ecx = x, edx = y (забор) -> eax: бит 0 — прясло вдоль x по кромке +y, бит 1 — вдоль y
+; по кромке +x. Линия забора идёт по передним кромкам, угол участка — в переднем углу
+; тайла (1, 1): прясло к соседу −x (−y) есть всегда, к соседу +x (+y) — только у конца
+; линии (поперёк соседей нет); одинокий тайл — обе кромки, 0 — только столб в углу
+; (портит rcx, rdx, r11)
+fence_edges:
+    push    rbx
+    push    rsi
+    push    rdi
+    mov     ebx, ecx
+    mov     esi, edx
+    xor     edi, edi                    ; соседи-заборы: 1 −x, 2 +x, 4 −y, 8 +y
+    lea     ecx, [ebx - 1]
+    mov     edx, esi
+    call    get_tile
+    cmp     eax, T_FENCE
+    jne     .n1
+    or      edi, 1
+.n1:
+    lea     ecx, [ebx + 1]
+    mov     edx, esi
+    call    get_tile
+    cmp     eax, T_FENCE
+    jne     .n2
+    or      edi, 2
+.n2:
+    mov     ecx, ebx
+    lea     edx, [esi - 1]
+    call    get_tile
+    cmp     eax, T_FENCE
+    jne     .n3
+    or      edi, 4
+.n3:
+    mov     ecx, ebx
+    lea     edx, [esi + 1]
+    call    get_tile
+    cmp     eax, T_FENCE
+    jne     .n4
+    or      edi, 8
+.n4:
+    mov     eax, 3
+    test    edi, edi
+    jz      .out
+    xor     eax, eax
+    test    edi, 1
+    jnz     .ex
+    test    edi, 2
+    jz      .ey0
+    test    edi, 12
+    jnz     .ey0
+.ex:
+    or      eax, 1
+.ey0:
+    test    edi, 4
+    jnz     .ey
+    test    edi, 8
+    jz      .out
+    test    edi, 3
+    jnz     .out
+.ey:
+    or      eax, 2
+.out:
     pop     rdi
     pop     rsi
     pop     rbx

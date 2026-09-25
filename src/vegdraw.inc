@@ -144,6 +144,13 @@ draw_veg:
     cmp     ebp, r8d
     jg      .cn
 .w:
+    ; лампа не горит — стекло тёмное
+    test    r10d, r10d
+    jns     .w1
+    cmp     dword [vd_off], 0
+    je      .w1
+    mov     r10d, 0x01383C44
+.w1:
     lea     r8, [albedo]
     mov     [r8 + rdx*4], r10d
     shl     eax, 16

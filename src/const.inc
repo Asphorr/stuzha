@@ -256,6 +256,8 @@ CS_KENNEL   equ 13
 CS_BIRDH    equ 14
 CS_WELL     equ 15
 CS_V0       equ 16                  ; растения: CS_V0 + порода·9 + сдвиг основания (3x3)
+CS_FPOST    equ CS_V0 + 6*9         ; забор: только столб в переднем углу
+CS_BENCHY   equ CS_FPOST + 1        ; лавочка вдоль y (CS_BENCH — вдоль x)
 CS_SZ       equ 48
 SW_N        equ 40                  ; след лопаты: лучей на всю дугу
 SW_TAIL     equ 14                  ; длина хвоста, лучей

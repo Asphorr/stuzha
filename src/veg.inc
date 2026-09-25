@@ -15,10 +15,30 @@ VK_BARK     equ 1                   ; кора: борозды
 VK_SNOW     equ 2                   ; снег: подушки на лапах, шапки
 VK_TWIG     equ 3                   ; веточка, стебель
 VK_BIRCH    equ 4                   ; берёста: чёрточки (порог·100 — биты 8-15, e0, e1 — куда)
+VK_WOOD     equ 5                   ; доска: волокна вдоль, торец темнее, снег сверху
+VK_LOG      equ 6                   ; бревно, полено: кора по боку, торец в кольцах (срез — биты 8-15)
+VK_METAL    equ 7                   ; железо, бетон: ровно, снег сверху
+VK_GLOW     equ 8                   ; светится (цвет как есть, с битами эмиссии)
+VK_PLAIN    equ 9                   ; как есть: верёвка, уголь, морковка
+; брусья и цилиндры (модели двора, prop.inc): середина, вид, цвет, оси, полуразмеры
+VX_TYPE     equ 12                  ; 1 брус, 2 цилиндр (x, y, z середины — как у шарика)
+VX_U        equ 32                  ; оси u, v, w (единичные; w — вдоль, от A к B)
+VX_V        equ 44
+VX_W        equ 56
+VX_HU       equ 68                  ; полуразмеры по u, v, w (у цилиндра hu — радиус)
+VX_HV       equ 72
+VX_HW       equ 76
+VX_SZ       equ 96
+VX_MAX      equ 1600
+VXID        equ 0x100000            ; в vr_b: шарик < VXID <= брус
+VX_K        equ 200                 ; съёмка: луч к глазу — от глубины VX_K
+VX_ZT       equ 400                 ; сверху: луч вниз — от высоты VX_ZT
 VRW         equ 128                 ; кадр съёмки, px
 VRH         equ 176
 VTN         equ 256                 ; сетка «что сверху» для снега: 0.5 U, от −64 U
 NVAR        equ 32
+NPROP       equ 30                  ; модели двора (prop.inc) — картинки после растений
+NVT         equ NVAR + NPROP
 VA_PX       equ 320000              ; арены картинок, пикселей
 VA_HM       equ 320000              ; арена карт высот, байт
 HSMAX       equ 97                  ; сторона карты высот растения не больше (1/32 тайла)
@@ -334,6 +354,561 @@ vb_add:
     movss   [r8 + 28], xmm5
     inc     dword [vg_nb]
 .full:
+    ret
+
+; ---------------------------------------------------------------- брусья и цилиндры
+; vx_a, vx_b — концы оси (x, y, z, U); vx_hu, vx_hv — полутолщины поперёк: hu — по
+; горизонтали (у стоячего — вдоль x), hv — вверх (у стоячего — вдоль y); vx_hint — своя
+; «вверх» для наклонной доски (0 — нет); у цилиндра hu — радиус. vx_type: 1 брус,
+; 2 цилиндр; vx_col, vx_kind -> фигура в vg_shp, цвет чуть вразброс
+; (портит rax, rcx, rdx, r8, r9, xmm0-xmm7)
+vx_seg:
+    mov     eax, [vg_nx]
+    cmp     eax, VX_MAX
+    jae     .full
+    mov     ecx, [vx_col]
+    mov     eax, [vx_kind]
+    cmp     al, VK_GLOW
+    je      .nj
+    call    vr_u
+    mov     r8d, eax
+    and     r8d, 31
+    add     r8d, 240
+    call    vc_mul
+.nj:
+    mov     [vx_colj], ecx
+    imul    eax, [vg_nx], VX_SZ
+    lea     r8, [vg_shp]
+    add     r8, rax
+    ; середина, ось
+    xor     ecx, ecx
+    lea     r9, [vx_a]
+.c:
+    movss   xmm0, [r9 + rcx*4]
+    movss   xmm1, [r9 + rcx*4 + (vx_b - vx_a)]
+    movaps  xmm2, xmm0
+    addss   xmm2, xmm1
+    mulss   xmm2, [f_0_5]
+    movss   [r8 + rcx*4], xmm2
+    subss   xmm1, xmm0
+    movss   [r9 + rcx*4 + (vx_w3 - vx_a)], xmm1
+    inc     ecx
+    cmp     ecx, 3
+    jb      .c
+    call    .norm3
+    maxss   xmm0, [vk_0_01]
+    mulss   xmm0, [f_0_5]
+    movss   [r8 + VX_HW], xmm0
+    ; «вверх»: своя, иначе z (у стоячего — −y)
+    movss   xmm0, [vx_hint]
+    mulss   xmm0, xmm0
+    movss   xmm1, [vx_hint + 4]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    movss   xmm1, [vx_hint + 8]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    comiss  xmm0, [f_0_5]
+    ja      .hk
+    mov     dword [vx_hint], 0
+    mov     dword [vx_hint + 4], 0
+    mov     dword [vx_hint + 8], __float32__(1.0)
+    movss   xmm0, [vx_w3 + 8]
+    andps   xmm0, [f_absmask]
+    comiss  xmm0, [vk_0_99]
+    jbe     .hk
+    mov     dword [vx_hint + 4], __float32__(-1.0)
+    mov     dword [vx_hint + 8], 0
+.hk:
+    ; u = w × h
+    movss   xmm0, [vx_w3 + 4]
+    mulss   xmm0, [vx_hint + 8]
+    movss   xmm1, [vx_w3 + 8]
+    mulss   xmm1, [vx_hint + 4]
+    subss   xmm0, xmm1
+    movss   xmm1, [vx_w3 + 8]
+    mulss   xmm1, [vx_hint]
+    movss   xmm2, [vx_w3]
+    mulss   xmm2, [vx_hint + 8]
+    subss   xmm1, xmm2
+    movss   xmm2, [vx_w3]
+    mulss   xmm2, [vx_hint + 4]
+    movss   xmm3, [vx_w3 + 4]
+    mulss   xmm3, [vx_hint]
+    subss   xmm2, xmm3
+    movss   [vx_u3], xmm0
+    movss   [vx_u3 + 4], xmm1
+    movss   [vx_u3 + 8], xmm2
+    push    r8
+    lea     r8, [vx_u3]
+    call    .nrm
+    pop     r8
+    ; v = u × w
+    movss   xmm0, [vx_u3 + 4]
+    mulss   xmm0, [vx_w3 + 8]
+    movss   xmm1, [vx_u3 + 8]
+    mulss   xmm1, [vx_w3 + 4]
+    subss   xmm0, xmm1
+    movss   xmm1, [vx_u3 + 8]
+    mulss   xmm1, [vx_w3]
+    movss   xmm2, [vx_u3]
+    mulss   xmm2, [vx_w3 + 8]
+    subss   xmm1, xmm2
+    movss   xmm2, [vx_u3]
+    mulss   xmm2, [vx_w3 + 4]
+    movss   xmm3, [vx_u3 + 4]
+    mulss   xmm3, [vx_w3]
+    subss   xmm2, xmm3
+    movss   [r8 + VX_V], xmm0
+    movss   [r8 + VX_V + 4], xmm1
+    movss   [r8 + VX_V + 8], xmm2
+    xor     ecx, ecx
+    lea     r9, [vx_a]
+.cp:
+    mov     eax, [r9 + rcx*4 + (vx_u3 - vx_a)]
+    mov     [r8 + VX_U + rcx*4], eax
+    mov     eax, [r9 + rcx*4 + (vx_w3 - vx_a)]
+    mov     [r8 + VX_W + rcx*4], eax
+    inc     ecx
+    cmp     ecx, 3
+    jb      .cp
+    mov     eax, [vx_hu]
+    mov     [r8 + VX_HU], eax
+    mov     eax, [vx_hv]
+    cmp     dword [vx_type], 2
+    jne     .hv
+    mov     eax, [vx_hu]
+.hv:
+    mov     [r8 + VX_HV], eax
+    mov     eax, [vx_type]
+    mov     [r8 + VX_TYPE], eax
+    mov     eax, [vx_colj]
+    mov     [r8 + 16], eax
+    mov     eax, [vx_kind]
+    mov     [r8 + 20], eax
+    mov     dword [r8 + 24], 0
+    mov     dword [r8 + 28], 0
+    mov     dword [vx_hint], 0
+    mov     dword [vx_hint + 4], 0
+    mov     dword [vx_hint + 8], 0
+    inc     dword [vg_nx]
+.full:
+    ret
+; vx_w3 -> единичный, xmm0 = была длина (портит xmm1, xmm2)
+.norm3:
+    push    r8
+    lea     r8, [vx_w3]
+    call    .nrm
+    pop     r8
+    ret
+; r8 -> 3 числа: единичными, xmm0 = была длина (портит xmm1, xmm2)
+.nrm:
+    movss   xmm0, [r8]
+    mulss   xmm0, xmm0
+    movss   xmm1, [r8 + 4]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    movss   xmm1, [r8 + 8]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    sqrtss  xmm0, xmm0
+    movss   xmm2, xmm0
+    maxss   xmm2, [vk_1em4]
+    movss   xmm1, [f_1]
+    divss   xmm1, xmm2
+    movss   xmm2, [r8]
+    mulss   xmm2, xmm1
+    movss   [r8], xmm2
+    movss   xmm2, [r8 + 4]
+    mulss   xmm2, xmm1
+    movss   [r8 + 4], xmm2
+    movss   xmm2, [r8 + 8]
+    mulss   xmm2, xmm1
+    movss   [r8 + 8], xmm2
+    ret
+
+; rsi -> таблица фигур (prop.inc: PBOX, PCYL, PBALL ... PEND); первое слово — 0: x, y
+; в тайлах от угла тайла (основание модели — 0.6 тайла), 1: в U от основания; z и
+; размеры — U. Перенос: ·vx_scl, + vx_off, x += z·vx_shx, y += z·vx_shy (наклон)
+; (портит rax, rcx, rdx, r8, r9, xmm0-xmm7; rsi — за таблицей)
+vx_tab:
+    mov     eax, [rsi]
+    mov     [vx_tmode], eax
+    add     rsi, 4
+.l:
+    mov     eax, [rsi]
+    test    eax, eax
+    jz      .end
+    mov     [vx_type], eax
+    lea     rdx, [rsi + 4]
+    lea     r9, [vx_a]
+    call    .pt
+    lea     rdx, [rsi + 16]
+    lea     r9, [vx_b]
+    call    .pt
+    movss   xmm0, [rsi + 28]
+    mulss   xmm0, [vx_scl]
+    movss   [vx_hu], xmm0
+    movss   xmm0, [rsi + 32]
+    mulss   xmm0, [vx_scl]
+    movss   [vx_hv], xmm0
+    mov     eax, [rsi + 36]
+    mov     [vx_hint], eax
+    mov     eax, [rsi + 40]
+    mov     [vx_hint + 4], eax
+    mov     eax, [rsi + 44]
+    mov     [vx_hint + 8], eax
+    mov     eax, [rsi + 48]
+    mov     [vx_col], eax
+    mov     eax, [rsi + 52]
+    mov     [vx_kind], eax
+    cmp     dword [vx_type], 3
+    je      .ball
+    call    vx_seg
+    jmp     .n
+.ball:
+    call    vx_ball
+.n:
+    add     rsi, 56
+    jmp     .l
+.end:
+    add     rsi, 4
+    ret
+; rdx -> точка таблицы -> r9: в U от основания, с переносом (портит xmm0-xmm2)
+.pt:
+    movss   xmm0, [rdx]
+    movss   xmm1, [rdx + 4]
+    cmp     dword [vx_tmode], 0
+    jne     .p1
+    mulss   xmm0, [vk_t2u]
+    subss   xmm0, [vk_b0]
+    mulss   xmm1, [vk_t2u]
+    subss   xmm1, [vk_b0]
+.p1:
+    movss   xmm2, [rdx + 8]
+    mulss   xmm0, [vx_scl]
+    mulss   xmm1, [vx_scl]
+    mulss   xmm2, [vx_scl]
+    addss   xmm0, [vx_off]
+    addss   xmm1, [vx_off + 4]
+    addss   xmm2, [vx_off + 8]
+    movss   [r9 + 8], xmm2
+    mulss   xmm2, [vx_shx]
+    addss   xmm0, xmm2
+    movss   [r9], xmm0
+    movss   xmm2, [r9 + 8]
+    mulss   xmm2, [vx_shy]
+    addss   xmm1, xmm2
+    movss   [r9 + 4], xmm1
+    ret
+
+; шарик из vx_a (середина), vx_hu (радиус), vx_col, vx_kind (портит rax, rcx, rdx, r8)
+vx_ball:
+    movss   xmm0, [vx_a]
+    movss   xmm1, [vx_a + 4]
+    movss   xmm2, [vx_a + 8]
+    movss   xmm3, [vx_hu]
+    mov     ecx, [vx_col]
+    mov     edx, [vx_kind]
+    xorps   xmm4, xmm4
+    xorps   xmm5, xmm5
+    jmp     vb_add
+
+; rbx = фигура -> vx_cn: 8 углов (x, y, z) (портит rax, rcx, rdx, r10, xmm0-xmm3)
+vx_corners:
+    xor     ecx, ecx
+    lea     r10, [vx_cn]
+.k:
+    xor     eax, eax
+.i:
+    movss   xmm0, [rbx + VX_U + rax*4]
+    mulss   xmm0, [rbx + VX_HU]
+    test    ecx, 1
+    jnz     .u1
+    xorps   xmm0, [f_signmask]
+.u1:
+    movss   xmm1, [rbx + VX_V + rax*4]
+    mulss   xmm1, [rbx + VX_HV]
+    test    ecx, 2
+    jnz     .v1
+    xorps   xmm1, [f_signmask]
+.v1:
+    movss   xmm2, [rbx + VX_W + rax*4]
+    mulss   xmm2, [rbx + VX_HW]
+    test    ecx, 4
+    jnz     .w1
+    xorps   xmm2, [f_signmask]
+.w1:
+    addss   xmm0, xmm1
+    addss   xmm0, xmm2
+    addss   xmm0, [rbx + rax*4]
+    lea     edx, [ecx + ecx*2]
+    add     edx, eax
+    movss   [r10 + rdx*4], xmm0
+    inc     eax
+    cmp     eax, 3
+    jb      .i
+    inc     ecx
+    cmp     ecx, 8
+    jb      .k
+    ret
+
+; rbx = фигура; vx_lo — начало луча, vx_ld — направление (в осях фигуры u, v, w),
+; vx_inf — раздуть на столько (карта высот: тонкое не проскочит между ячейками)
+; -> eax = 1, если попал; xmm0 = t входа; vx_ln — нормаль (в осях фигуры)
+; (портит rcx, rdx, r10, xmm0-xmm7)
+vx_hit:
+    cmp     dword [rbx + VX_TYPE], 2
+    je      .cyl
+    ; брус: три пары плоскостей
+    movss   xmm6, [vk_mbig]             ; вход
+    movss   xmm7, [vk_big]              ; выход
+    xor     ecx, ecx                    ; ось входа
+    xor     edx, edx
+    lea     r10, [vx_lo]
+.b:
+    movss   xmm0, [r10 + rdx*4]
+    movss   xmm1, [r10 + rdx*4 + (vx_ld - vx_lo)]
+    movss   xmm2, [rbx + VX_HU + rdx*4]
+    addss   xmm2, [vx_inf]
+    movaps  xmm3, xmm1
+    andps   xmm3, [f_absmask]
+    comiss  xmm3, [f_1em6]
+    jae     .bd
+    movaps  xmm3, xmm0
+    andps   xmm3, [f_absmask]
+    comiss  xmm3, xmm2
+    ja      .miss
+    jmp     .bn
+.bd:
+    movaps  xmm3, xmm2
+    xorps   xmm3, [f_signmask]
+    subss   xmm3, xmm0
+    divss   xmm3, xmm1                  ; t1
+    movaps  xmm4, xmm2
+    subss   xmm4, xmm0
+    divss   xmm4, xmm1                  ; t2
+    movaps  xmm5, xmm3
+    minss   xmm5, xmm4
+    maxss   xmm3, xmm4
+    comiss  xmm5, xmm6
+    jbe     .b1
+    movaps  xmm6, xmm5
+    mov     ecx, edx
+.b1:
+    minss   xmm7, xmm3
+.bn:
+    inc     edx
+    cmp     edx, 3
+    jb      .b
+    comiss  xmm6, xmm7
+    ja      .miss
+    ; грань входа — навстречу лучу
+    xor     eax, eax
+    mov     [vx_ln], eax
+    mov     [vx_ln + 4], eax
+    mov     [vx_ln + 8], eax
+    mov     eax, __float32__(1.0)
+    movss   xmm1, [r10 + rcx*4 + (vx_ld - vx_lo)]
+    comiss  xmm1, [f_0]
+    jb      .bs
+    mov     eax, __float32__(-1.0)
+.bs:
+    mov     [r10 + rcx*4 + (vx_ln - vx_lo)], eax
+    movaps  xmm0, xmm6
+    mov     eax, 1
+    ret
+.cyl:
+    ; цилиндр вдоль w: бок (a + t·da)² + (b + t·db)² = r², торцы |c + t·dc| = h
+    movss   xmm2, [rbx + VX_HU]
+    addss   xmm2, [vx_inf]
+    movss   [vx_r], xmm2
+    movss   xmm0, [vx_ld]
+    mulss   xmm0, xmm0
+    movss   xmm1, [vx_ld + 4]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1                  ; A
+    movss   xmm6, [vk_mbig]
+    movss   xmm7, [vk_big]
+    comiss  xmm0, [f_1em6]
+    jae     .cq
+    ; вдоль оси: внутри круга — да
+    movss   xmm0, [vx_lo]
+    mulss   xmm0, xmm0
+    movss   xmm1, [vx_lo + 4]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    mulss   xmm2, xmm2
+    comiss  xmm0, xmm2
+    ja      .miss
+    jmp     .cs
+.cq:
+    movss   xmm1, [vx_lo]
+    mulss   xmm1, [vx_ld]
+    movss   xmm3, [vx_lo + 4]
+    mulss   xmm3, [vx_ld + 4]
+    addss   xmm1, xmm3                  ; B
+    movss   xmm3, [vx_lo]
+    mulss   xmm3, xmm3
+    movss   xmm4, [vx_lo + 4]
+    mulss   xmm4, xmm4
+    addss   xmm3, xmm4
+    mulss   xmm2, xmm2
+    subss   xmm3, xmm2                  ; C
+    movaps  xmm4, xmm1
+    mulss   xmm4, xmm1
+    mulss   xmm3, xmm0
+    subss   xmm4, xmm3                  ; B² − AC
+    comiss  xmm4, [f_0]
+    jb      .miss
+    sqrtss  xmm4, xmm4
+    xorps   xmm1, [f_signmask]
+    movaps  xmm6, xmm1
+    subss   xmm6, xmm4
+    divss   xmm6, xmm0                  ; вход в бок
+    movaps  xmm7, xmm1
+    addss   xmm7, xmm4
+    divss   xmm7, xmm0                  ; выход
+.cs:
+    movss   [vx_tc], xmm6
+    ; торцы
+    movss   xmm2, [rbx + VX_HW]
+    addss   xmm2, [vx_inf]
+    movss   xmm0, [vx_lo + 8]
+    movss   xmm1, [vx_ld + 8]
+    movaps  xmm3, xmm1
+    andps   xmm3, [f_absmask]
+    comiss  xmm3, [f_1em6]
+    jae     .cd
+    movaps  xmm3, xmm0
+    andps   xmm3, [f_absmask]
+    comiss  xmm3, xmm2
+    ja      .miss
+    movss   xmm5, [vk_mbig]
+    jmp     .cc
+.cd:
+    movaps  xmm3, xmm2
+    xorps   xmm3, [f_signmask]
+    subss   xmm3, xmm0
+    divss   xmm3, xmm1
+    movaps  xmm4, xmm2
+    subss   xmm4, xmm0
+    divss   xmm4, xmm1
+    movaps  xmm5, xmm3
+    minss   xmm5, xmm4                  ; вход в торец
+    maxss   xmm3, xmm4
+    minss   xmm7, xmm3
+    maxss   xmm6, xmm5
+.cc:
+    comiss  xmm6, xmm7
+    ja      .miss
+    xor     eax, eax
+    mov     [vx_ln + 8], eax
+    comiss  xmm5, [vx_tc]
+    ja      .ccap
+    ; бок: (a + t·da, b + t·db) / r
+    movss   xmm1, [f_1]
+    divss   xmm1, [vx_r]
+    movss   xmm0, [vx_ld]
+    mulss   xmm0, xmm6
+    addss   xmm0, [vx_lo]
+    mulss   xmm0, xmm1
+    movss   [vx_ln], xmm0
+    movss   xmm0, [vx_ld + 4]
+    mulss   xmm0, xmm6
+    addss   xmm0, [vx_lo + 4]
+    mulss   xmm0, xmm1
+    movss   [vx_ln + 4], xmm0
+    movaps  xmm0, xmm6
+    mov     eax, 1
+    ret
+.ccap:
+    mov     [vx_ln], eax
+    mov     [vx_ln + 4], eax
+    mov     eax, __float32__(1.0)
+    movss   xmm1, [vx_ld + 8]
+    comiss  xmm1, [f_0]
+    jb      .cps
+    mov     eax, __float32__(-1.0)
+.cps:
+    mov     [vx_ln + 8], eax
+    movaps  xmm0, xmm6
+    mov     eax, 1
+    ret
+.miss:
+    xor     eax, eax
+    ret
+
+; rbx = фигура, vx_P — точка в мире, vx_D — направление -> vx_lo, vx_ld (в осях фигуры)
+; (портит rax, rcx, r10, xmm0-xmm2)
+vx_local:
+    xor     eax, eax
+    lea     r10, [vx_lo]
+.a:
+    imul    ecx, eax, 12
+    movss   xmm0, [vx_P]
+    subss   xmm0, [rbx]
+    mulss   xmm0, [rbx + VX_U + rcx]
+    movss   xmm1, [vx_P + 4]
+    subss   xmm1, [rbx + 4]
+    mulss   xmm1, [rbx + VX_U + rcx + 4]
+    addss   xmm0, xmm1
+    movss   xmm1, [vx_P + 8]
+    subss   xmm1, [rbx + 8]
+    mulss   xmm1, [rbx + VX_U + rcx + 8]
+    addss   xmm0, xmm1
+    movss   [r10 + rax*4], xmm0
+    movss   xmm0, [vx_D]
+    mulss   xmm0, [rbx + VX_U + rcx]
+    movss   xmm1, [vx_D + 4]
+    mulss   xmm1, [rbx + VX_U + rcx + 4]
+    addss   xmm0, xmm1
+    movss   xmm1, [vx_D + 8]
+    mulss   xmm1, [rbx + VX_U + rcx + 8]
+    addss   xmm0, xmm1
+    movss   [r10 + rax*4 + (vx_ld - vx_lo)], xmm0
+    inc     eax
+    cmp     eax, 3
+    jb      .a
+    ret
+
+; rbx = фигура: vx_ln (в осях) -> vx_n (в мире) (портит eax, r10, xmm0-xmm1)
+vx_world_n:
+    xor     eax, eax
+    lea     r10, [vx_n]
+.a:
+    movss   xmm0, [vx_ln]
+    mulss   xmm0, [rbx + VX_U + rax*4]
+    movss   xmm1, [vx_ln + 4]
+    mulss   xmm1, [rbx + VX_V + rax*4]
+    addss   xmm0, xmm1
+    movss   xmm1, [vx_ln + 8]
+    mulss   xmm1, [rbx + VX_W + rax*4]
+    addss   xmm0, xmm1
+    movss   [r10 + rax*4], xmm0
+    inc     eax
+    cmp     eax, 3
+    jb      .a
+    ret
+
+; rbx = фигура, xmm0 = x, xmm1 = y: луч сверху -> eax = 1, xmm0 = высота попадания
+; (портит rcx, rdx, xmm0-xmm7)
+vx_down:
+    movss   [vx_P], xmm0
+    movss   [vx_P + 4], xmm1
+    mov     eax, [vk_zt]
+    mov     [vx_P + 8], eax
+    mov     dword [vx_D], 0
+    mov     dword [vx_D + 4], 0
+    mov     dword [vx_D + 8], __float32__(-1.0)
+    call    vx_local
+    call    vx_hit
+    test    eax, eax
+    jz      .out
+    movss   xmm1, [vk_zt]
+    subss   xmm1, xmm0
+    movaps  xmm0, xmm1
+.out:
     ret
 
 ; ---------------------------------------------------------------- ель
@@ -1979,6 +2554,38 @@ vg_render:
     dec     r12d
     jmp     .b1
 .b2:
+    ; брусья — по углам
+    xor     r12d, r12d
+.bx:
+    cmp     r12d, [vg_nx]
+    jae     .b3
+    imul    eax, r12d, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    call    vx_corners
+    xor     r13d, r13d
+.bc:
+    lea     eax, [r13d + r13d*2]
+    movss   xmm0, [r10 + rax*4]
+    movss   xmm1, [r10 + rax*4 + 4]
+    movss   xmm2, [r10 + rax*4 + 8]
+    movaps  xmm3, xmm0
+    subss   xmm3, xmm1
+    mulss   xmm3, [vk_s2]
+    addss   xmm0, xmm1
+    mulss   xmm0, [vk_s8]
+    mulss   xmm2, [vk_c30]
+    subss   xmm0, xmm2
+    minss   xmm8, xmm3
+    maxss   xmm9, xmm3
+    minss   xmm10, xmm0
+    maxss   xmm11, xmm0
+    inc     r13d
+    cmp     r13d, 8
+    jb      .bc
+    inc     r12d
+    jmp     .bx
+.b3:
     VFLOOR  eax, xmm8, xmm0
     mov     [vr_x0], eax
     cvtsi2ss xmm0, eax
@@ -2082,6 +2689,16 @@ vg_render:
     movss   xmm1, [f_1]
     subss   xmm1, xmm0
     sqrtss  xmm1, xmm1                  ; c — к глазу
+    ; под снегом не видно: точка ниже земли — мимо
+    movaps  xmm2, xmm7
+    mulss   xmm2, [vk_c30]
+    movaps  xmm3, xmm1
+    mulss   xmm3, [f_0_5]
+    addss   xmm2, xmm3
+    mulss   xmm2, [vs_r]
+    addss   xmm2, [rbx + 8]
+    comiss  xmm2, [vk_m0_2]
+    jb      .sin
     movaps  xmm2, xmm1
     mulss   xmm2, [vs_r]
     addss   xmm2, [vs_d0]
@@ -2126,6 +2743,196 @@ vg_render:
     inc     r12d
     jmp     .sp
 .spd:
+    ; ----- 3б) брусья и цилиндры: из каждого пикселя их рамки — луч от глаза
+    mov     dword [vx_inf], 0
+    xor     r12d, r12d
+.xs:
+    cmp     r12d, [vg_nx]
+    jae     .xsd
+    imul    eax, r12d, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    call    vx_corners
+    movss   xmm4, [vk_big]
+    movss   xmm5, [vk_mbig]
+    movss   xmm6, [vk_big]
+    movss   xmm7, [vk_mbig]
+    xor     r13d, r13d
+.xc:
+    lea     eax, [r13d + r13d*2]
+    movss   xmm0, [r10 + rax*4]
+    movss   xmm1, [r10 + rax*4 + 4]
+    movss   xmm2, [r10 + rax*4 + 8]
+    movaps  xmm3, xmm0
+    subss   xmm3, xmm1
+    mulss   xmm3, [vk_s2]
+    subss   xmm3, [vr_x0f]
+    addss   xmm0, xmm1
+    mulss   xmm0, [vk_s8]
+    mulss   xmm2, [vk_c30]
+    subss   xmm0, xmm2
+    subss   xmm0, [vr_y0f]
+    minss   xmm4, xmm3
+    maxss   xmm5, xmm3
+    minss   xmm6, xmm0
+    maxss   xmm7, xmm0
+    inc     r13d
+    cmp     r13d, 8
+    jb      .xc
+    VFLOOR  r13d, xmm4, xmm0
+    xor     eax, eax
+    cmp     r13d, eax
+    cmovl   r13d, eax
+    VFLOOR  r14d, xmm5, xmm0
+    mov     eax, [vr_w]
+    dec     eax
+    cmp     r14d, eax
+    cmovg   r14d, eax
+    VFLOOR  r15d, xmm6, xmm0
+    xor     eax, eax
+    cmp     r15d, eax
+    cmovl   r15d, eax
+    VFLOOR  edi, xmm7, xmm0
+    mov     eax, [vr_h]
+    dec     eax
+    cmp     edi, eax
+    cmovg   edi, eax
+    ; луч в осях фигуры: o = pa·i + pb·j + pk, направление — от глаза (−T)
+    xor     ecx, ecx
+    lea     r11, [vx_lo]
+.xk:
+    imul    eax, ecx, 12
+    movss   xmm0, [rbx + VX_U + rax]
+    movss   xmm1, [rbx + VX_U + rax + 4]
+    movss   xmm2, [rbx + VX_U + rax + 8]
+    movaps  xmm3, xmm0
+    subss   xmm3, xmm1
+    mulss   xmm3, [vk_s2]               ; pa = R·a
+    movss   [r11 + rcx*4 + (vx_pa - vx_lo)], xmm3
+    addss   xmm0, xmm1
+    movaps  xmm1, xmm0
+    mulss   xmm0, [vk_s8]
+    movaps  xmm4, xmm2
+    mulss   xmm4, [vk_c30]
+    subss   xmm0, xmm4                  ; pb = −Up·a
+    movss   [r11 + rcx*4 + (vx_pb - vx_lo)], xmm0
+    mulss   xmm1, [vk_c6]
+    mulss   xmm2, [f_0_5]
+    addss   xmm1, xmm2                  ; T·a
+    movaps  xmm2, xmm1
+    xorps   xmm2, [f_signmask]
+    movss   [r11 + rcx*4 + (vx_ld - vx_lo)], xmm2
+    mulss   xmm1, [vk_vk]
+    movss   xmm2, [rbx]
+    mulss   xmm2, [rbx + VX_U + rax]
+    subss   xmm1, xmm2
+    movss   xmm2, [rbx + 4]
+    mulss   xmm2, [rbx + VX_U + rax + 4]
+    subss   xmm1, xmm2
+    movss   xmm2, [rbx + 8]
+    mulss   xmm2, [rbx + VX_U + rax + 8]
+    subss   xmm1, xmm2                  ; K·(T·a) − c·a
+    movss   xmm2, [vr_x0f]
+    addss   xmm2, [f_0_5]
+    mulss   xmm2, xmm3
+    addss   xmm1, xmm2
+    movss   xmm2, [vr_y0f]
+    addss   xmm2, [f_0_5]
+    mulss   xmm2, xmm0
+    addss   xmm1, xmm2
+    movss   [r11 + rcx*4 + (vx_pk - vx_lo)], xmm1
+    inc     ecx
+    cmp     ecx, 3
+    jb      .xk
+.xj:
+    cmp     r15d, edi
+    jg      .xn
+    mov     esi, r13d
+.xi:
+    cmp     esi, r14d
+    jg      .xjn
+    cvtsi2ss xmm4, esi
+    cvtsi2ss xmm5, r15d
+    xor     ecx, ecx
+    lea     r11, [vx_lo]
+.xo:
+    movss   xmm0, [r11 + rcx*4 + (vx_pa - vx_lo)]
+    mulss   xmm0, xmm4
+    movss   xmm1, [r11 + rcx*4 + (vx_pb - vx_lo)]
+    mulss   xmm1, xmm5
+    addss   xmm0, xmm1
+    addss   xmm0, [r11 + rcx*4 + (vx_pk - vx_lo)]
+    movss   [r11 + rcx*4], xmm0
+    inc     ecx
+    cmp     ecx, 3
+    jb      .xo
+    call    vx_hit
+    test    eax, eax
+    jz      .xin
+    movss   xmm1, [vk_vk]
+    subss   xmm1, xmm0                  ; глубина
+    ; под снегом не видно
+    cvtsi2ss xmm3, r15d
+    addss   xmm3, [f_0_5]
+    addss   xmm3, [vr_y0f]
+    mulss   xmm3, [vk_c30]
+    movaps  xmm2, xmm1
+    mulss   xmm2, [f_0_5]
+    subss   xmm2, xmm3
+    comiss  xmm2, [vk_m0_2]
+    jb      .xin
+    mov     eax, r15d
+    imul    eax, [vr_w]
+    add     eax, esi
+    lea     r8, [vr_d]
+    comiss  xmm1, [r8 + rax*4]
+    jbe     .xin
+    movss   [r8 + rax*4], xmm1
+    lea     r8, [vr_b]
+    lea     ecx, [r12d + VXID]
+    mov     [r8 + rax*4], ecx
+    lea     r9, [rax + rax*2]
+    ; точка: X·R − Y·Up + глубина·T
+    cvtsi2ss xmm2, esi
+    addss   xmm2, [f_0_5]
+    addss   xmm2, [vr_x0f]
+    mulss   xmm2, [vk_s2]               ; X·0.707
+    cvtsi2ss xmm3, r15d
+    addss   xmm3, [f_0_5]
+    addss   xmm3, [vr_y0f]              ; Y
+    movaps  xmm4, xmm3
+    mulss   xmm4, [vk_s8]
+    movaps  xmm5, xmm1
+    mulss   xmm5, [vk_c6]
+    addss   xmm4, xmm5                  ; Y·0.354 + d·0.612
+    lea     r8, [vr_sp]
+    movaps  xmm0, xmm4
+    addss   xmm0, xmm2
+    movss   [r8 + r9*4], xmm0
+    subss   xmm4, xmm2
+    movss   [r8 + r9*4 + 4], xmm4
+    mulss   xmm3, [vk_c30]
+    mulss   xmm1, [f_0_5]
+    subss   xmm1, xmm3
+    movss   [r8 + r9*4 + 8], xmm1
+    call    vx_world_n
+    lea     r8, [vr_n]
+    movss   xmm0, [vx_n]
+    movss   [r8 + r9*4], xmm0
+    movss   xmm0, [vx_n + 4]
+    movss   [r8 + r9*4 + 4], xmm0
+    movss   xmm0, [vx_n + 8]
+    movss   [r8 + r9*4 + 8], xmm0
+.xin:
+    inc     esi
+    jmp     .xi
+.xjn:
+    inc     r15d
+    jmp     .xj
+.xn:
+    inc     r12d
+    jmp     .xs
+.xsd:
     ; ----- 4) «что сверху» (снег лежит только там, где над точкой ничего): макушки шариков
     lea     rdi, [vt_top]
     mov     ecx, VTN*VTN
@@ -2212,6 +3019,76 @@ vg_render:
     dec     r12d
     jmp     .t1
 .t9:
+    ; брусья: луч сверху в каждую клетку под ними
+    mov     dword [vx_inf], 0
+    xor     r12d, r12d
+.u1:
+    cmp     r12d, [vg_nx]
+    jae     .u9
+    imul    eax, r12d, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    call    .xybox
+    movaps  xmm0, xmm4
+    addss   xmm0, [vk_64]
+    addss   xmm0, xmm0
+    VFLOOR  r13d, xmm0, xmm1
+    movaps  xmm0, xmm5
+    addss   xmm0, [vk_64]
+    addss   xmm0, xmm0
+    VFLOOR  r14d, xmm0, xmm1
+    movaps  xmm0, xmm6
+    addss   xmm0, [vk_64]
+    addss   xmm0, xmm0
+    VFLOOR  r15d, xmm0, xmm1
+    movaps  xmm0, xmm7
+    addss   xmm0, [vk_64]
+    addss   xmm0, xmm0
+    VFLOOR  edi, xmm0, xmm1
+    xor     eax, eax
+    cmp     r13d, eax
+    cmovl   r13d, eax
+    cmp     r15d, eax
+    cmovl   r15d, eax
+    mov     eax, VTN - 1
+    cmp     r14d, eax
+    cmovg   r14d, eax
+    cmp     edi, eax
+    cmovg   edi, eax
+.uj:
+    cmp     r15d, edi
+    jg      .un
+    mov     esi, r13d
+.ui:
+    cmp     esi, r14d
+    jg      .ujn
+    cvtsi2ss xmm0, esi
+    addss   xmm0, [f_0_5]
+    mulss   xmm0, [f_0_5]
+    subss   xmm0, [vk_64]
+    cvtsi2ss xmm1, r15d
+    addss   xmm1, [f_0_5]
+    mulss   xmm1, [f_0_5]
+    subss   xmm1, [vk_64]
+    call    vx_down
+    test    eax, eax
+    jz      .uin
+    mov     eax, r15d
+    shl     eax, 8
+    add     eax, esi
+    lea     r8, [vt_top]
+    maxss   xmm0, [r8 + rax*4]
+    movss   [r8 + rax*4], xmm0
+.uin:
+    inc     esi
+    jmp     .ui
+.ujn:
+    inc     r15d
+    jmp     .uj
+.un:
+    inc     r12d
+    jmp     .u1
+.u9:
     ; ----- 5) пиксели -> картинка
     mov     rax, [vra_px]
     mov     [rbp + RS_PX], rax
@@ -2242,7 +3119,10 @@ vg_render:
     movsxd  rax, dword [r8 + r12*4]
     test    eax, eax
     js      .pempty
+    cmp     eax, VXID
+    jae     .pshape
     mov     [vs_bi], eax
+    mov     dword [vs_flat], 0
     shl     rax, 5
     lea     rbx, [vg_blobs]
     add     rbx, rax
@@ -2265,6 +3145,7 @@ vg_render:
     mulss   xmm2, xmm3
     addss   xmm2, [rbx + 8]
     movss   [vs_sz], xmm2
+.hsh:
     ; хеш пикселя: шум и пороги
     mov     eax, r12d
     mov     ecx, [vg_seed]
@@ -2310,7 +3191,150 @@ vg_render:
     je      .kbi
     cmp     eax, VK_SNOW
     je      .ksn
-    jmp     .noise                      ; веточка — как есть
+    cmp     eax, VK_WOOD
+    je      .kw
+    cmp     eax, VK_LOG
+    je      .kl
+    cmp     eax, VK_METAL
+    je      .km
+    cmp     eax, VK_GLOW
+    je      .col
+    jmp     .noise                      ; веточка, верёвка — как есть
+.kw:
+    ; доска: полосы волокон поперёк (по грани — та ось, что не нормаль и не длина),
+    ; изредка трещина; торец темнее; снег сверху
+    call    .loc
+    call    .faces
+    comiss  xmm2, xmm0
+    jb      .kw0
+    comiss  xmm2, xmm1
+    jb      .kw0
+    mov     r8d, 196
+    call    vc_mul
+    jmp     .kwsn
+.kw0:
+    movss   xmm3, [vs_lv]
+    comiss  xmm0, xmm1
+    jae     .kw1
+    movss   xmm3, [vs_lu]
+.kw1:
+    mulss   xmm3, [vk_1_2]
+    addss   xmm3, [vk_64]
+    cvttss2si eax, xmm3
+    imul    edx, [vs_bi], 7
+    add     edx, [vg_seed]
+    HASH    eax, edx
+    mov     r8d, eax
+    and     r8d, 47
+    add     r8d, 212
+    test    eax, 0x3F00
+    jnz     .kw2
+    mov     r8d, 164
+.kw2:
+    call    vc_mul
+.kwsn:
+    test    r13d, r13d
+    jz      .noise
+    movss   xmm1, [vs_nz]
+    comiss  xmm1, [vk_0_6]
+    ja      .snowc
+    jmp     .noise
+.kl:
+    ; бревно: бок — кора бороздами, торец — срез в кольцах, по краю кора
+    call    .loc
+    call    .faces
+    comiss  xmm2, [vk_0_8]
+    ja      .klc
+    movss   xmm0, [vs_lw]
+    mulss   xmm0, [vk_0_8]
+    addss   xmm0, [vk_64]
+    cvttss2si eax, xmm0
+    movss   xmm0, [vs_nu]
+    addss   xmm0, [f_1]
+    mulss   xmm0, [vk_2_4]
+    cvttss2si edx, xmm0
+    movss   xmm0, [vs_nv]
+    addss   xmm0, [f_1]
+    mulss   xmm0, [vk_2_4]
+    cvttss2si r8d, xmm0
+    shl     r8d, 3
+    add     edx, r8d
+    mov     r8d, [vs_bi]
+    shl     r8d, 6
+    add     edx, r8d
+    HASH    eax, edx
+    test    eax, 3
+    jnz     .kl1
+    mov     r8d, 176
+    call    vc_mul
+.kl1:
+    test    r13d, r13d
+    jz      .noise
+    movss   xmm1, [vs_nz]
+    comiss  xmm1, [vk_0_55]
+    ja      .snowc
+    jmp     .noise
+.klc:
+    movss   xmm0, [vs_lu]
+    mulss   xmm0, xmm0
+    movss   xmm1, [vs_lv]
+    mulss   xmm1, xmm1
+    addss   xmm0, xmm1
+    sqrtss  xmm0, xmm0
+    divss   xmm0, [rbx + VX_HU]         ; ρ: 0 в середине, 1 — край
+    comiss  xmm0, [vk_0_85]
+    jbe     .klr
+    mov     r8d, 210                    ; кора по краю среза
+    call    vc_mul
+    jmp     .kl1
+.klr:
+    movss   [vs_lu], xmm0
+    movzx   eax, byte [rbx + 21]
+    and     eax, 3
+    lea     rcx, [vk_endc]
+    mov     ecx, [rcx + rax*4]
+    call    vr_u
+    mov     r8d, eax
+    and     r8d, 31
+    add     r8d, 232
+    call    vc_mul
+    ; кольца: сдвиг — свой у полена
+    mov     eax, [vs_bi]
+    mov     edx, [vg_seed]
+    HASH    eax, edx
+    and     eax, 7
+    cvtsi2ss xmm1, eax
+    mulss   xmm1, [vk_0_12]
+    movss   xmm0, [vs_lu]
+    mulss   xmm0, [vk_4_2]
+    addss   xmm0, xmm1
+    cvttss2si eax, xmm0
+    mov     r8d, 250
+    test    eax, 1
+    jz      .klq
+    mov     r8d, 222
+.klq:
+    movss   xmm0, [vs_lu]
+    comiss  xmm0, [vk_0_15]
+    jae     .klk
+    mov     r8d, 196                    ; сердцевина
+.klk:
+    call    vc_mul
+    jmp     .kl1
+.km:
+    ; железо, бетон: ровно, снег сверху
+    test    r13d, r13d
+    jz      .kmn
+    movss   xmm1, [vs_nz]
+    comiss  xmm1, [vk_0_6]
+    ja      .snowc
+.kmn:
+    mov     eax, [vs_h]
+    and     eax, 15
+    add     eax, 248
+    mov     r8d, eax
+    call    vc_mul
+    jmp     .col
 .kn:
     ; хвоя: снег, если открыто и смотрит вверх (порог — по нагрузке, разброс — у шарика
     ; целиком: снег комьями, а не крапом)
@@ -2422,7 +3446,14 @@ vg_render:
     or      ecx, 0x01000000
     mov     rax, [rbp + RS_PX]
     mov     [rax + r12*4], ecx
-    ; нормаль в сферу, с дрожью (переходы полутонами, без полос)
+    ; нормаль в сферу, с дрожью (переходы полутонами, без полос); грань бруса — ровно
+    cmp     dword [vs_flat], 0
+    je      .njit
+    movss   xmm0, [vs_nx]
+    movss   xmm1, [vs_ny]
+    movss   xmm2, [vs_nz]
+    jmp     .nq
+.njit:
     mov     eax, [vs_h]
     shr     eax, 14
     and     eax, 31
@@ -2444,6 +3475,7 @@ vg_render:
     mulss   xmm2, [vk_0_006]
     subss   xmm2, [vk_0_09]
     addss   xmm2, [vs_nz]
+.nq:
     call    nq_id
     ; почти вверх — своя «вверх» сферы
     movss   xmm0, [vs_nz]
@@ -2473,6 +3505,38 @@ vg_render:
     mov     byte [rax + r12], 0
     mov     rax, [rbp + RS_PO]
     mov     dword [rax + r12*4], 0
+    jmp     .pxn
+.pshape:
+    ; брус, цилиндр: нормаль и точка — со съёмки
+    sub     eax, VXID
+    mov     [vs_bi], eax
+    imul    eax, eax, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    lea     rax, [r12 + r12*2]
+    lea     r8, [vr_n]
+    movss   xmm0, [r8 + rax*4]
+    movss   [vs_nx], xmm0
+    movss   xmm0, [r8 + rax*4 + 4]
+    movss   [vs_ny], xmm0
+    movss   xmm0, [r8 + rax*4 + 8]
+    movss   [vs_nz], xmm0
+    lea     r8, [vr_sp]
+    movss   xmm0, [r8 + rax*4]
+    movss   [vs_sx], xmm0
+    movss   xmm0, [r8 + rax*4 + 4]
+    movss   [vs_sy], xmm0
+    movss   xmm0, [r8 + rax*4 + 8]
+    movss   [vs_sz], xmm0
+    ; грань — ровно; бок цилиндра — с дрожью, как шарик
+    mov     dword [vs_flat], 1
+    cmp     dword [rbx + VX_TYPE], 2
+    jne     .hsh
+    call    .faces
+    comiss  xmm2, [vk_0_8]
+    ja      .hsh
+    mov     dword [vs_flat], 0
+    jmp     .hsh
 .pxn:
     inc     r12d
     jmp     .px
@@ -2501,6 +3565,27 @@ vg_render:
     dec     r12d
     jmp     .h1
 .h2:
+    ; брусья — по углам
+    xor     r12d, r12d
+.hx:
+    cmp     r12d, [vg_nx]
+    jae     .h2b
+    imul    eax, r12d, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    call    .xybox
+    andps   xmm4, [f_absmask]
+    andps   xmm5, [f_absmask]
+    andps   xmm6, [f_absmask]
+    andps   xmm7, [f_absmask]
+    maxss   xmm4, xmm5
+    maxss   xmm6, xmm7
+    maxss   xmm4, xmm6
+    addss   xmm4, [f_0_5]
+    maxss   xmm8, xmm4
+    inc     r12d
+    jmp     .hx
+.h2b:
     mulss   xmm8, [vk_s2i]              ; / 0.70711
     cvttss2si eax, xmm8
     inc     eax
@@ -2610,6 +3695,87 @@ vg_render:
     dec     r12d
     jmp     .h3
 .h9:
+    ; брусья: луч сверху в каждую клетку (фигура чуть раздута — тонкая доска не
+    ; проскочит между клетками)
+    mov     dword [vx_inf], __float32__(0.36)
+    xor     r12d, r12d
+.g1:
+    cmp     r12d, [vg_nx]
+    jae     .g9
+    imul    eax, r12d, VX_SZ
+    lea     rbx, [vg_shp]
+    add     rbx, rax
+    call    .xybox
+    subss   xmm4, [vk_0_4]
+    addss   xmm5, [vk_0_4]
+    subss   xmm6, [vk_0_4]
+    addss   xmm7, [vk_0_4]
+    mulss   xmm4, [vk_s2i]
+    addss   xmm4, xmm9
+    VFLOOR  r13d, xmm4, xmm0
+    mulss   xmm5, [vk_s2i]
+    addss   xmm5, xmm9
+    VFLOOR  r14d, xmm5, xmm0
+    inc     r14d
+    mulss   xmm6, [vk_s2i]
+    addss   xmm6, xmm9
+    VFLOOR  r15d, xmm6, xmm0
+    mulss   xmm7, [vk_s2i]
+    addss   xmm7, xmm9
+    VFLOOR  edi, xmm7, xmm0
+    inc     edi
+    xor     eax, eax
+    cmp     r13d, eax
+    cmovl   r13d, eax
+    cmp     r15d, eax
+    cmovl   r15d, eax
+    mov     eax, [rbp + RS_HS]
+    dec     eax
+    cmp     r14d, eax
+    cmovg   r14d, eax
+    cmp     edi, eax
+    cmovg   edi, eax
+.gj:
+    cmp     r15d, edi
+    jg      .gn
+    mov     esi, r13d
+.gi:
+    cmp     esi, r14d
+    jg      .gjn
+    cvtsi2ss xmm0, esi
+    subss   xmm0, xmm9
+    mulss   xmm0, [vk_s2]
+    cvtsi2ss xmm1, r15d
+    subss   xmm1, xmm9
+    mulss   xmm1, [vk_s2]
+    call    vx_down
+    test    eax, eax
+    jz      .gin
+    mulss   xmm0, [vk_c30]              ; px
+    cvtss2si eax, xmm0
+    test    eax, eax
+    jle     .gin
+    mov     ecx, 127
+    cmp     eax, ecx
+    cmova   eax, ecx
+    mov     ecx, r15d
+    imul    ecx, [rbp + RS_HS]
+    add     ecx, esi
+    mov     r8, [rbp + RS_HM]
+    cmp     al, [r8 + rcx]
+    jbe     .gin
+    mov     [r8 + rcx], al
+.gin:
+    inc     esi
+    jmp     .gi
+.gjn:
+    inc     r15d
+    jmp     .gj
+.gn:
+    inc     r12d
+    jmp     .g1
+.g9:
+    mov     dword [vx_inf], 0
     add     rsp, 40
     pop     rbp
     pop     r15
@@ -2619,6 +3785,92 @@ vg_render:
     pop     rdi
     pop     rsi
     pop     rbx
+    ret
+; rbx = фигура -> xmm4, xmm5 = x от..до, xmm6, xmm7 = y от..до (портит rax, rcx, xmm0-xmm3)
+.xybox:
+    call    vx_corners
+    movss   xmm4, [vk_big]
+    movss   xmm5, [vk_mbig]
+    movss   xmm6, [vk_big]
+    movss   xmm7, [vk_mbig]
+    xor     eax, eax
+.xy1:
+    lea     ecx, [eax + eax*2]
+    movss   xmm0, [r10 + rcx*4]
+    movss   xmm1, [r10 + rcx*4 + 4]
+    minss   xmm4, xmm0
+    maxss   xmm5, xmm0
+    minss   xmm6, xmm1
+    maxss   xmm7, xmm1
+    inc     eax
+    cmp     eax, 8
+    jb      .xy1
+    ret
+; rbx = фигура, vs_s* -> vs_lu, vs_lv, vs_lw — точка в осях фигуры (портит xmm0-xmm2)
+.loc:
+    movss   xmm0, [vs_sx]
+    subss   xmm0, [rbx]
+    movss   xmm1, [vs_sy]
+    subss   xmm1, [rbx + 4]
+    movss   xmm2, [vs_sz]
+    subss   xmm2, [rbx + 8]
+    movss   [vs_lu], xmm0
+    movss   [vs_lv], xmm1
+    movss   [vs_lw], xmm2
+    push    rax
+    lea     rax, [rbx + VX_U]
+    call    .dotl
+    movss   [vs_tu], xmm0
+    lea     rax, [rbx + VX_V]
+    call    .dotl
+    movss   [vs_tv], xmm0
+    lea     rax, [rbx + VX_W]
+    call    .dotl
+    movss   [vs_lw], xmm0
+    movss   xmm0, [vs_tu]
+    movss   [vs_lu], xmm0
+    movss   xmm0, [vs_tv]
+    movss   [vs_lv], xmm0
+    pop     rax
+    ret
+.dotl:
+    movss   xmm0, [vs_lu]
+    mulss   xmm0, [rax]
+    movss   xmm1, [vs_lv]
+    mulss   xmm1, [rax + 4]
+    addss   xmm0, xmm1
+    movss   xmm1, [vs_lw]
+    mulss   xmm1, [rax + 8]
+    addss   xmm0, xmm1
+    ret
+; rbx = фигура, vs_n* -> vs_nu, vs_nv (n·u, n·v); xmm0, xmm1, xmm2 = |n·u|, |n·v|, |n·w|
+.faces:
+    push    rax
+    lea     rax, [rbx + VX_U]
+    call    .dotn
+    movss   [vs_nu], xmm0
+    lea     rax, [rbx + VX_V]
+    call    .dotn
+    movss   [vs_nv], xmm0
+    lea     rax, [rbx + VX_W]
+    call    .dotn
+    movaps  xmm2, xmm0
+    andps   xmm2, [f_absmask]
+    movss   xmm0, [vs_nu]
+    andps   xmm0, [f_absmask]
+    movss   xmm1, [vs_nv]
+    andps   xmm1, [f_absmask]
+    pop     rax
+    ret
+.dotn:
+    movss   xmm0, [vs_nx]
+    mulss   xmm0, [rax]
+    movss   xmm1, [vs_ny]
+    mulss   xmm1, [rax + 4]
+    addss   xmm0, xmm1
+    movss   xmm1, [vs_nz]
+    mulss   xmm1, [rax + 8]
+    addss   xmm0, xmm1
     ret
 
 ; ---------------------------------------------------------------- все варианты
@@ -2657,6 +3909,7 @@ veg_init:
     mov     [vg_rng], eax
     mov     [vg_seed], eax
     mov     dword [vg_nb], 0
+    mov     dword [vg_nx], 0
     mov     dword [vg_young], 0
     cvtsi2ss xmm0, dword [rbx + 4]
     mulss   xmm0, [vk_ic30]
@@ -2722,6 +3975,7 @@ veg_init:
     inc     r12d
     cmp     r12d, NVAR
     jb      .v
+    call    prop_init                   ; двор — туда же, после растений
     add     rsp, 40
     pop     r12
     pop     rdi
@@ -3378,7 +4632,7 @@ veg_gallery:
     add     r13d, 4
 .vn:
     inc     r12d
-    cmp     r12d, NVAR
+    cmp     r12d, NVT
     jb      .v
     add     rsp, 40
     pop     rbp
@@ -3480,6 +4734,13 @@ vk_9:       dd 9.0
 vk_24:      dd 24.0
 vk_35:      dd 35.0
 vk_55:      dd 55.0
+vk_0_99:    dd 0.99
+vk_vk:      dd 200.0                    ; VX_K: откуда луч к глазу
+vk_zt:      dd 400.0                    ; VX_ZT: откуда луч сверху
+vk_t2u:     dd 22.627417                ; тайл -> U
+vk_b0:      dd 13.611806                ; основание модели: 154/256 тайла, U
+; срезы поленьев и брёвен: свежий, берёзовый, серый старый, тёмный
+vk_endc:    dd 0xB08A5C, 0xC0A474, 0x7A7064, 0x5A4A3A
 ; хвоя ели — четыре оттенка
 vg_npal:    dd 0x1E3828, 0x223E2C, 0x264230, 0x1C3426
 ; варианты: порода, высота px, снег·100 | подвид << 16, зерно
@@ -3676,6 +4937,45 @@ vh_r:       dd 0
 vh_cx1:     dd 0
 vh_cy1:     dd 0
 dbg_veg:    dd 0                        ; --veg: в снимке — все растения
+; брусья и цилиндры
+vg_nx:      dd 0
+vx_tmode:   dd 0
+vx_scl:     dd 1.0
+vx_shx:     dd 0.0
+vx_shy:     dd 0.0
+vx_off:     dd 0.0, 0.0, 0.0
+vx_type:    dd 0
+vx_col:     dd 0
+vx_colj:    dd 0
+vx_kind:    dd 0
+vx_hu:      dd 0.0
+vx_hv:      dd 0.0
+vx_inf:     dd 0.0
+vx_r:       dd 0.0
+vx_tc:      dd 0.0
+vs_flat:    dd 0
+vs_lu:      dd 0.0
+vs_lv:      dd 0.0
+vs_lw:      dd 0.0
+vs_tu:      dd 0.0
+vs_tv:      dd 0.0
+vs_nu:      dd 0.0
+vs_nv:      dd 0.0
+vx_a:       dd 0.0, 0.0, 0.0
+vx_b:       dd 0.0, 0.0, 0.0
+vx_hint:    dd 0.0, 0.0, 0.0
+vx_w3:      dd 0.0, 0.0, 0.0
+vx_u3:      dd 0.0, 0.0, 0.0
+vx_lo:      dd 0.0, 0.0, 0.0
+vx_ld:      dd 0.0, 0.0, 0.0
+vx_ln:      dd 0.0, 0.0, 0.0
+vx_n:       dd 0.0, 0.0, 0.0
+vx_P:       dd 0.0, 0.0, 0.0
+vx_D:       dd 0.0, 0.0, 0.0
+vx_pa:      dd 0.0, 0.0, 0.0
+vx_pb:      dd 0.0, 0.0, 0.0
+vx_pk:      dd 0.0, 0.0, 0.0
+vx_cn:      times 24 dd 0.0
 
 section .bss
 alignb 16
@@ -3683,13 +4983,15 @@ vg_blobs:   resb VG_MAXB*VB_SZ
 vr_d:       resd VRW*VRH                ; съёмка: глубина, шарик, нормаль
 vr_b:       resd VRW*VRH
 vr_n:       resd VRW*VRH*3
+vr_sp:      resd VRW*VRH*3              ; точка поверхности (брусья)
+vg_shp:     resb VX_MAX*VX_SZ
 vt_top:     resd VTN*VTN
 va_px:      resd VA_PX                  ; картинки растений
 va_po:      resd VA_PX
 va_pn:      resb VA_PX
 va_hm:      resb VA_HM
 alignb 16
-vrs:        resb NVAR*RS_SZ
+vrs:        resb NVT*RS_SZ
 vmap:       resw MAPW*MAPW              ; вариант + 1 | (сдвиг основания | зеркало << 7) << 8
 nq_v:       resd (NAZ*NEL + 1)*4
 nq_lut:     resb 4096

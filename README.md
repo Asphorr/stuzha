@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, trees, people, light, weather and sound are all produced by
-~46k lines of hand-written NASM. The game is a single 540 KB executable.
+~49k lines of hand-written NASM. The game is a single 570 KB executable.
 
 **What's inside**
 
@@ -73,10 +73,21 @@ files. The village, trees, people, light, weather and sound are all produced by
   has several variants, mirrored and shifted per tile. Pines grow in groves,
   young spruces and willows fill the forest edge, and dry weeds stand along
   the fences.
+- **The yard is built the same way.** Fences, street lamps, benches,
+  woodpiles, kennels, birdhouses, crosses, snowmen, washing lines and the
+  sweep well are models of boards, beams, logs and spheres, photographed by
+  the same camera. A picket fence has rails behind the pickets, a board fence
+  stands dark and solid, and some pickets are missing or leaning. A street
+  lamp is a wooden pole strapped to a concrete stub, with insulators and a
+  glowing glass under the head. A bench stands along the fence with its back
+  to it, and the log ends of a woodpile show their rings. Snow lies on every
+  surface that is open to the sky. The yard casts real shadows too.
 - **People are posed capsule figures.** The player and the zombies are
   skeletons of about 25 capsules, posed every frame and ray-cast into the
   G-buffer. They can face any direction and are lit from any side. When
-  walking, the hips ride on the straight leg. Zombies lurch and some of them
+  walking, the hips ride on the straight leg. A running player takes longer
+  strides, kicks the heels up, leaves the ground between steps, pumps the
+  arms and carries the shovel forward with the shaft level. Zombies lurch and some of them
   limp; they reach forward in a chase, lunge when they strike and reel back
   when hit. There are six zombie outfits: a quilted jacket with an ushanka, a
   coat with a headscarf, a sheepskin, a sweater, a cap, and an old woman's
@@ -160,7 +171,7 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | `--intro` (with a shot) | draws the title overlay over the shot |
 | `--house N`, `--pick 1\|2` (with `--shot3`) | inside the N-th izba; next to its first item or container, pressing E (and 1–4) just before the shot |
 | `--albedo` (with a shot) | writes the unlit G-buffer colours to `shotN.bmp` |
-| `--veg`, `--figs` (with a shot) | every plant variant in rows; every zombie outfit and the player in eight turns |
+| `--veg`, `--figs` (with a shot) | every plant and yard model in rows; every zombie outfit, the player walking and running, in eight turns |
 | `--view N` (with a shot) | height of `viewN.bmp` (16:9), 1080 by default |
 | `--bench` (with a shot) | runs the scene in a live window for 600 frames and writes per-pass timings to `bench.bin` |
 | `--threads N`, `--noavx` | limit the render thread pool; use only the SSE2 path |
@@ -176,8 +187,8 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, деревья, люди, свет, погода и звук целиком получаются из ~46 тыс. строк
-NASM, написанных руками. Вся игра — один exe на 540 КБ.
+Село, деревья, люди, свет, погода и звук целиком получаются из ~49 тыс. строк
+NASM, написанных руками. Вся игра — один exe на 570 КБ.
 
 **Что внутри**
 
@@ -222,10 +233,20 @@ NASM, написанных руками. Вся игра — один exe на 5
   берёза кладёт на крышу кружевную тень. У каждой породы несколько вариантов,
   на тайле они зеркалятся и сдвигаются. Сосны растут рощами, опушку заполняют
   подрост и ивняк, вдоль заборов стоит сухой бурьян.
+- **Двор собран так же.** Заборы, фонари, лавочки, поленницы, будки,
+  скворечники, кресты, снеговики, бельевые верёвки и колодец-журавль — модели
+  из досок, брусьев, брёвен и шариков, снятые той же камерой. У штакетника за
+  штакетинами видны прожилины, сплошной забор стоит тёмной стеной, где-то
+  штакетины не хватает или она покосилась. Фонарь — деревянный столб на
+  бетонном пасынке, с изоляторами и светящимся стеклом под корпусом. Лавочка
+  стоит вдоль забора спинкой к нему, у поленницы видны кольца на срезах. Снег
+  лежит на всём, что открыто сверху, и двор отбрасывает настоящие тени.
 - **Люди — фигуры из капсул в позе.** Игрок и зомби — скелеты примерно из 25
   капсул. Поза считается каждый кадр, фигура рисуется лучом в G-буфер, поэтому
   она может смотреть куда угодно, и свет ложится на неё с любой стороны. На
-  ходу таз едет по прямой ноге. Зомби шатаются, иные хромают, в погоне тянут
+  ходу таз едет по прямой ноге. На бегу у игрока шаг длиннее, пятки
+  забрасываются, между шагами он отрывается от земли, руки работают, а лопату
+  он несёт черенком вперёд. Зомби шатаются, иные хромают, в погоне тянут
   руки, при ударе делают выпад, а от лопаты отшатываются. Одежда шести видов:
   ватник с ушанкой, пальто с платком, тулуп, свитер, кепка и бабкина шаль. На
   одежде кровь и снег, а труп понемногу заметает.

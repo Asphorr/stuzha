@@ -376,6 +376,7 @@ gen_map:
     call    place_trees
     call    veg_extra                   ; подрост, ивняк, бурьян, пни
     call    veg_assign                  ; вариант, сдвиг, зеркало — каждому растению
+    call    prop_assign                 ; и каждой мелочи двора (фонарю — огонь у лампы)
     add     rsp, 40
     pop     rbp
     pop     r15

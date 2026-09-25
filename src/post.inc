@@ -575,21 +575,22 @@ draw_wires:
 .w:
     test    r15d, r15d
     jz      .out
+    ; к изоляторам на столбе (основание модели — 154/256 тайла)
     movzx   eax, byte [rbx]
     shl     eax, 8
-    add     eax, 128
+    add     eax, 154
     mov     [dw_ax], eax
     movzx   eax, byte [rbx + 1]
     shl     eax, 8
-    add     eax, 128
+    add     eax, 154
     mov     [dw_ay], eax
     movzx   eax, byte [rbx + 2]
     shl     eax, 8
-    add     eax, 128
+    add     eax, 154
     mov     [dw_bx], eax
     movzx   eax, byte [rbx + 3]
     shl     eax, 8
-    add     eax, 128
+    add     eax, 154
     mov     [dw_by], eax
     mov     ecx, [dw_ax]
     mov     edx, [dw_ay]
@@ -737,7 +738,7 @@ draw_wires:
     mov     ecx, esi
     mov     edx, edi
     call    w2s
-    sub     edx, 40
+    sub     edx, 41
     add     edx, r12d
     cmp     eax, SCR_W
     jae     .sn
