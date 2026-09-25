@@ -1857,6 +1857,23 @@ rev_run:
     jb      .l
     and     r8d, 0xFFFFF
     mov     [rv_p], r8d
+    ; NaN в линиях (сломался какой-то голос) — реверб с нуля, а не тишина до конца игры
+    movss   xmm0, [rv_f]
+    addss   xmm0, [rv_f + 28]
+    addss   xmm0, xmm5
+    addss   xmm0, xmm6
+    ucomiss xmm0, xmm0
+    jnp     .ok
+    push    rdi
+    lea     rdi, [rv_c]
+    xor     eax, eax
+    mov     ecx, RVN*(RVM+1) + 4*1024
+    rep     stosd                       ; rv_c, rv_a — подряд
+    pop     rdi
+    xorps   xmm0, xmm0
+    movups  [rv_f], xmm0
+    movups  [rv_f + 16], xmm0
+.ok:
     add     rsp, 32
     pop     rbx
     ret
@@ -1930,6 +1947,14 @@ master_out:
     add     rdi, 4
     dec     ecx
     jnz     .l
+    ; NaN в выходном ФНЧ — с нуля (иначе тишина до конца игры)
+    movaps  xmm0, xmm12
+    addss   xmm0, xmm13
+    ucomiss xmm0, xmm0
+    jnp     .fin
+    xorps   xmm12, xmm12
+    xorps   xmm13, xmm13
+.fin:
     movss   [mo_l], xmm12
     movss   [mo_r], xmm13
     movss   [st_peak], xmm15
@@ -3961,9 +3986,24 @@ az_voices:
     pop     r12
     pop     rbx
     ret
-; ecx = звук, xmm2 = громкость, xmm3 = высота: из места зомби rbx
+; ecx = звук, xmm2 = громкость, xmm3 = высота: из места зомби rbx; хрипота — у каждого
+; своя (по номеру)
 .say:
     sub     rsp, 8
+    lea     rax, [ents]
+    mov     rdx, rbx
+    sub     rdx, rax
+    shr     edx, 4                      ; ESZ = 80 = 16·5
+    imul    edx, edx, 0xCCCD
+    shr     edx, 18
+    cvtsi2ss xmm0, edx
+    mulss   xmm0, [ac_sqrt5]
+    cvttss2si eax, xmm0
+    cvtsi2ss xmm1, eax
+    subss   xmm0, xmm1
+    mulss   xmm0, [ac_0_8]
+    addss   xmm0, [ac_0_7]
+    movss   [gt_a], xmm0
     movss   xmm0, [rbx + E_X]
     movss   xmm1, [rbx + E_Y]
     call    snd_emit
@@ -4928,11 +4968,7 @@ L_kill:
     FLT   FBP, 900.0, 0.15, 1.0, 0, 1.0, 1.0
     FLT   FBP, 2600.0, 0.15, 1.0, 0, 1.3, 0.5
     LEND
-    LAYER 1.0, 0.02, 0, 0.55, 0.2, 0.06, 0.2, 0.3, 0.25
-    SRC   0.15, 1.0, 0, 0, OSAW, 115.0, 0.12, 0.6, 0.35, 0.03, 18.0, 0.3, 2.0, 1.0
-    FLT   FBP, 520.0, 0.1, 0.8, 0.3, 5.0, 1.0
-    FLT   FBP, 1050.0, 0.1, 1.0, 0, 6.0, 0.5
-    LEND
+    ; последний стон — зов (asynth.inc, cd_dmoan)
 ; --- зомби достал: взмах и удар по телогрейке
 L_zatk:
     LAYER 1.0, 0, 0, 0.3, 0.2, 0.04, 0, 0, 0.04
@@ -4945,47 +4981,9 @@ L_zatk:
     FLT   FLP, 400.0, 0.1, 1.0, 0, 0.8, 1.0
     FLT   FBP, 1800.0, 0.1, 1.0, 0, 1.2, 0.25
     LEND
-; --- рык при ударе: пила через две форманты, частая АМ — хрип
-L_snarl:
-    LAYER 1.0, 0, 0, 0.84, 0.2, 0.02, 0.12, 0.3, 0.12
-    SRC   0.35, 1.0, 0, 0, OSAW, 135.0, 0.12, 0.8, 0.2, 0.06, 31.0, 0.65, 1.5, 1.0
-    FLT   FBP, 680.0, 0.1, 0.85, 0.15, 3.5, 1.0
-    FLT   FBP, 1450.0, 0.1, 1.0, 0, 4.5, 0.55
-    LEND
-; --- стон бродячего: «о-а», высота плывёт вниз, голос дрожит
-L_groan:
-    LAYER 1.0, 0, 0, 0.67, 0.25, 0.35, 0.45, 0.5, 0.35
-    SRC   0.12, 1.0, 0, 0, OSAW, 82.0, 0.1, 0.86, 1.0, 0.03, 5.5, 0.18, 3.5, 0.5
-    FLT   FBP, 430.0, 0.15, 1.3, 0.6, 5.0, 1.0
-    FLT   FBP, 950.0, 0.12, 1.15, 0.6, 6.0, 0.45
-    LEND
-; --- «хм?» — услышал, идёт проверять
-L_hmm:
-    LAYER 1.0, 0, 0, 0.46, 0.2, 0.04, 0.1, 0.3, 0.08
-    SRC   0.15, 1.0, 0, 0, OSAW, 108.0, 0.1, 1.2, 0.1, 0.02, 0, 0, 1.0, 0.5
-    FLT   FBP, 360.0, 0.1, 1.0, 0, 4.0, 1.0
-    FLT   FBP, 820.0, 0.1, 1.0, 0, 5.0, 0.4
-    LEND
-; --- заметил: вскрик-рык, срывается вниз
-L_aggro:
-    LAYER 1.0, 0, 0, 0.6, 0.15, 0.04, 0.35, 0.3, 0.25
-    SRC   0.4, 1.0, 0, 0, OSAW, 160.0, 0.1, 0.62, 0.35, 0.06, 33.0, 0.6, 2.2, 0.5
-    FLT   FBP, 720.0, 0.1, 0.75, 0.3, 3.0, 1.0
-    FLT   FBP, 1550.0, 0.1, 0.85, 0.3, 4.0, 0.6
-    LEND
-    LAYER 1.0, 0, 0, 0.19, 0.2, 0.05, 0.3, 0.3, 0.2
-    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 1.5, 0
-    FLT   FBP, 2600.0, 0.15, 1.0, 0, 1.0, 1.0
-    NOFLT
-    LEND
-; --- рычит на бегу
-L_growl:
-    LAYER 1.0, 0, 0, 0.6, 0.2, 0.06, 0.22, 0.4, 0.2
-    SRC   0.35, 1.0, 0, 0, OSAW, 96.0, 0.1, 0.85, 0.3, 0.05, 27.0, 0.7, 2.0, 0.5
-    FLT   FBP, 560.0, 0.1, 1.0, 0, 3.5, 1.0
-    FLT   FBP, 1250.0, 0.1, 1.0, 0, 4.5, 0.5
-    LEND
-; --- учуял по ветру: три вдоха носом и «хм»
+; --- рык, стон, «хм?», вскрик, рык на бегу — зов (asynth.inc: cd_snarl, cd_groan, cd_hmm,
+;     cd_aggro, cd_zgrowl)
+; --- учуял по ветру: три вдоха носом, потом «хм» (cd_shmm)
 L_sniff:
     LAYER 1.0, 0, 0, 0.42, 0.2, 0.025, 0.04, 0.3, 0.035
     SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.4, 0
@@ -5001,11 +4999,6 @@ L_sniff:
     SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.4, 0
     FLT   FBP, 2100.0, 0.1, 1.0, 0, 1.3, 1.0
     FLT   FHP, 4500.0, 0.1, 1.0, 0, 0.7, 0.35
-    LEND
-    LAYER 1.0, 0.62, 0.05, 0.38, 0.2, 0.04, 0.1, 0.3, 0.08
-    SRC   0.15, 1.0, 0, 0, OSAW, 105.0, 0.1, 1.15, 0.1, 0.02, 0, 0, 1.0, 0.5
-    FLT   FBP, 360.0, 0.1, 1.0, 0, 4.0, 1.0
-    FLT   FBP, 820.0, 0.1, 1.0, 0, 5.0, 0.4
     LEND
 ; --- выдох (вместе с паром изо рта)
 L_breath:
@@ -5038,13 +5031,7 @@ L_knock:
     NOFLT
     NOFLT
     LEND
-; --- петля скрипит: редкие рывки (пила ~30 Гц) в узких полосах
-L_creak:
-    LAYER 1.0, 0, 0, 0.25, 0.2, 0.08, 0.25, 0.4, 0.1
-    SRC   0.05, 1.0, 0, 0, OSAW, 26.0, 0.3, 2.2, 0.3, 0.08, 0, 0, 1.2, 0
-    FLT   FBP, 950.0, 0.2, 1.0, 0, 12.0, 4.0
-    FLT   FBP, 1900.0, 0.2, 1.0, 0, 10.0, 2.4
-    LEND
+; --- петля ставни визжит — зёрна (asynth.inc, gd_hinge)
 ; --- сердце: тук-тук
 L_hb:
     LAYER 1.0, 0, 0, 0.35, 0.1, 0.004, 0.01, 0, 0.06
@@ -5103,18 +5090,18 @@ snd_tab:
     db LAYIX(L_sz), 1
     db LAYIX(L_swing), 1
     db LAYIX(L_hit), 3
-    db LAYIX(L_kill), 3
+    db LAYIX(L_kill), 2                 ; + последний стон — зов
     db LAYIX(L_zatk), 2
-    db LAYIX(L_snarl), 1
-    db LAYIX(L_groan), 1
-    db LAYIX(L_hmm), 1
-    db LAYIX(L_aggro), 2
-    db LAYIX(L_growl), 1
-    db LAYIX(L_sniff), 4
+    db 0, 0                             ; рык при ударе — зов
+    db 0, 0                             ; стон — зов
+    db 0, 0                             ; «хм?» — зов
+    db 0, 0                             ; вскрик — зов
+    db 0, 0                             ; рык на бегу — зов
+    db LAYIX(L_sniff), 3                ; + «хм» — зов
     db LAYIX(L_breath), 1
     db LAYIX(L_click), 2
     db LAYIX(L_knock), 2
-    db LAYIX(L_creak), 1
+    db 0, 0                             ; петля — зёрна
     db 0, 0                             ; лай — зов
     db 0, 0                             ; вой — зов
     db LAYIX(L_hb), 2
@@ -5135,7 +5122,17 @@ snd_xk:
     db VK_GRAIN, GD_ROAD
     db 0, 0
     db VK_GRAIN, GD_ZDRAG
-    times SN_BARK - SN_SWING db 0, 0
+    db 0, 0, 0, 0                       ; взмах, удар
+    db VK_CALL, CD_DMOAN                ; добит
+    db 0, 0                             ; достал
+    db VK_CALL, CD_SNARL
+    db VK_CALL, CD_GROAN
+    db VK_CALL, CD_HMM
+    db VK_CALL, CD_AGGRO
+    db VK_CALL, CD_ZGROWL
+    db VK_CALL, CD_SHMM                 ; учуял
+    db 0, 0, 0, 0, 0, 0                 ; выдох, фонарик, ставня
+    db VK_GRAIN, GD_HINGE
     db VK_CALL, CD_BARK
     db VK_CALL, CD_HOWL
     db 0, 0, 0, 0                       ; сердце, смерть
@@ -5366,6 +5363,7 @@ ac_7000:    dd 7000.0
 ac_17000:   dd 17000.0
 ac_1e6:     dd 1000000.0
 ac_i255:    dd 0.003921569
+ac_sqrt5:   dd 2.2360680
 ac_i1400:   dd 0.000714286
 ac_ln2:     dd 0.69314718
 ac_rv_out:  dd 0.4                      ; реверб: линии -> уши
