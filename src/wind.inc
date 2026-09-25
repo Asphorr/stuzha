@@ -773,12 +773,14 @@ build_wgrid:
     mulss   xmm0, [wind_g]
     comiss  xmm0, [f_0_45]
     ja      .calc
+    mov     dword [wg_on], 0            ; light_rows_x не собирает нулевую маску
     mov     rdi, rbx
     xor     eax, eax
     mov     ecx, (GW*GW + 7) / 8
     rep     stosq
     jmp     .out
 .calc:
+    mov     dword [wg_on], 1
     xor     r13d, r13d
 .y:
     xor     r12d, r12d

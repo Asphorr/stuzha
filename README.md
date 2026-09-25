@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~29k lines of hand-written NASM. The game is a single 250 KB executable.
+~31k lines of hand-written NASM. The game is a single 350 KB executable.
 
 **What's inside**
 
@@ -42,12 +42,16 @@ files. The village, sprites, light, weather and sound are all produced by
   the lamps, and highlights roll off smoothly instead of clipping to white.
   The screen is split into 16×16 tiles, and each tile only evaluates the
   lights that reach it.
-- **Fast on every core.** Per-row passes run on a small thread pool, the moon
-  shadow sweep runs in the background while objects are drawn, and HUD text and
-  presenting happen on their own output thread. The lighting pass has an AVX2
-  path (8 pixels per step) next to the SSE2 one. Every path produces the same
-  frame down to the byte, which is checked against the single-threaded SSE2
-  build. On an i7-7700 a frame takes about 5.5 ms (around 180 fps).
+- **Fast on every core.** Per-row passes run on a small thread pool. Objects
+  and roofs are drawn in horizontal screen bands at once: every band replays
+  the same painter's order but writes only its own rows, and the band edges
+  follow last frame's timings. The moon shadow sweep runs on a background
+  thread from the start of the frame until the light pass needs it, and HUD
+  text and presenting happen on their own output thread. Lighting and the
+  floor have AVX2 paths (8 pixels per step) next to the SSE2 ones. Every path
+  produces the same frame down to the byte, which is checked against the
+  single-threaded SSE2 build. On an i7-7700 a frame takes about 4.3 ms
+  (around 230 fps).
 - **The world.** Gabled snow roofs are rasterized in world planes with
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
@@ -113,8 +117,8 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~29 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 250 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~31 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 350 КБ.
 
 **Что внутри**
 
@@ -131,11 +135,14 @@ The game can render fixed-seed scenes to files, which is how it was developed:
   Освещённый снег подсвечивает стены и фигуры снизу и искрится под фонарями,
   а пересвет плавно уходит в насыщение, а не в белое пятно. Экран поделён на
   плитки 16×16, и каждая считает только те огни, что до неё достают.
-- **На всех ядрах.** Построчные проходы идут на пуле потоков, тени луны
-  считаются фоном, пока рисуются объекты, надписи и вывод в окно — в своём
-  потоке. У освещения есть путь на AVX2 (8 пикселей за шаг) рядом с SSE2. Все
-  пути дают один и тот же кадр до байта, это сверяется с однопоточной SSE2-сборкой.
-  На i7-7700 кадр занимает около 5,5 мс (около 180 fps).
+- **На всех ядрах.** Построчные проходы идут на пуле потоков. Объекты и крыши
+  рисуются сразу горизонтальными полосами экрана: каждая полоса проходит тот же
+  порядок художника, но пишет только свои строки, а границы полос следуют за
+  временем прошлого кадра. Тени луны считаются фоновым потоком с начала кадра до
+  прохода света, надписи и вывод в окно — в своём потоке. У освещения и пола
+  есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
+  же кадр до байта, это сверяется с однопоточной SSE2-сборкой. На i7-7700 кадр
+  занимает около 4,3 мс (около 230 fps).
 - **Мир.** Двускатные крыши в снегу растеризуются в мировых плоскостях с
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют

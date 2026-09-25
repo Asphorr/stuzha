@@ -19,6 +19,7 @@ lx_bw3:   db 6,7,6,7,6,7,6,7, 14,15,14,15,14,15,14,15, 6,7,6,7,6,7,6,7, 14,15,14
 lx_w255:  times 16 dw 255
 lx_wlmax: times 4 dw 1023, 1023, 1023, 255
 lx_w2047: times 16 dw 2047
+lx_wtmk:  times 16 dw TM_K
 lx_w64:   times 16 dw 64
 lx_w190:  times 16 dw 190
 lx_gray:  times 4 dw 1, 2, 1, 0
@@ -175,8 +176,12 @@ LX_SZ    equ 1088
     LXBC    ymm3, xmm3
     vpand   ymm3, ymm3, ymm2
     vpaddw  ymm2, ymm2, ymm3
-    ; тоновая кривая: 16 слов -> два сбора по 8 двордов из tm_lut
+    ; тоновая кривая: 16 слов -> два сбора по 8 двордов из tm_lut; до колена (≤ TM_K)
+    ; она — тождество, и если все 16 там, сборы не нужны
     vpminsw ymm2, ymm2, [lx_w2047]
+    vpcmpgtw ymm3, ymm2, [lx_wtmk]
+    vptest  ymm3, ymm3
+    jz      %%tmid
     vpmovzxwd ymm3, xmm2
     vextracti128 xmm4, ymm2, 1
     vpmovzxwd ymm4, xmm4
@@ -186,6 +191,7 @@ LX_SZ    equ 1088
     vpgatherdd ymm7, [rsi + ymm4*4 + (tm_lut - albedo)], ymm5
     vpackusdw ymm2, ymm6, ymm7
     vpermq  ymm2, ymm2, 0xD8
+%%tmid:
     ; позёмка: X += (летящий снег − X)·доля/64 (доля 0 — без изменений)
     cmp     dword [rsp + LX_DRF], 0
     je      %%nd
@@ -401,6 +407,8 @@ light_rows_x:
     vmovdqa [rsp + LX_N2], ymm7
     ; ----- позёмка: у земли (z < 12), где метёт — доля 0..60
     mov     dword [rsp + LX_DRF], 0
+    cmp     dword [wg_on], 0
+    je      .nodrift                    ; тихо — маска нулевая
     vmovdqa ymm5, [lx_d12]
     vpcmpgtd ymm5, ymm5, ymm4           ; z < 12
     vmovdqa ymm6, [rsp + LX_SIDX]
@@ -478,9 +486,17 @@ light_rows_x:
     vpand   ymm10, ymm10, ymm5          ; только где z < 12
     vmovdqa [rsp + LX_D], ymm10
 .nodrift:
-    ; ----- виньетка и зерно: байты (c + k + grain_off) & 0xFFFF
+    ; ----- виньетка и зерно: байты (c + k + grain_off) & 0xFFFF — подряд, кроме стыка
     vpmovzxbd ymm3, [rsi + rcx + (vign - albedo)]
     vmovdqa [rsp + LX_VG], ymm3
+    mov     eax, [rsp + LX_GOFF]
+    add     eax, ecx
+    and     eax, 0xFFFF
+    cmp     eax, 0x10000 - 8
+    ja      .grw
+    vpmovsxbd ymm5, [rsi + rax + (grain - albedo)]
+    jmp     .grd
+.grw:
     vmovd   xmm3, ecx
     vpbroadcastd ymm3, xmm3
     vpaddd  ymm3, ymm3, [lx_d0_7]
@@ -490,6 +506,7 @@ light_rows_x:
     vpgatherdd ymm5, [rsi + ymm3*1 + (grain - albedo)], ymm4
     vpslld  ymm5, ymm5, 24
     vpsrad  ymm5, ymm5, 24
+.grd:
     vmovdqa [rsp + LX_GR], ymm5
     ; ----- цвет: две половины по 4 пикселя
     LXHALF  0

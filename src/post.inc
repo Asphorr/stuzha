@@ -34,23 +34,31 @@ bloom_pass:
     mov     edx, BLH
     mov     r8d, 4
     call    par_for
-    ; размытие
+    ; размытие: ящик по строкам, потом по столбцам, дважды (линии — на всех ядрах)
     mov     r15d, 2
 .bit:
-    lea     rsi, [blA]
-    lea     rdi, [blB]
+    lea     rax, [blA]
+    mov     [bb_src], rax
+    lea     rax, [blB]
+    mov     [bb_dst], rax
+    mov     qword [bb_al], 8
+    mov     qword [bb_ac], BLW*8
+    mov     dword [bb_len], BLW
+    lea     rcx, [blur_lines]
+    mov     edx, BLH/2
+    mov     r8d, 4
+    call    par_for
+    lea     rax, [blB]
+    mov     [bb_src], rax
+    lea     rax, [blA]
+    mov     [bb_dst], rax
+    mov     qword [bb_al], BLW*8
+    mov     qword [bb_ac], 8
+    mov     dword [bb_len], BLH
+    lea     rcx, [blur_lines]
+    mov     edx, BLW/2
     mov     r8d, 8
-    mov     r9d, BLW*8
-    mov     r10d, BLW
-    mov     r11d, BLH
-    call    blur_box
-    lea     rsi, [blB]
-    lea     rdi, [blA]
-    mov     r8d, BLW*8
-    mov     r9d, 8
-    mov     r10d, BLH
-    mov     r11d, BLW
-    call    blur_box
+    call    par_for
     dec     r15d
     jnz     .bit
     lea     rcx, [bloom_add]
@@ -245,37 +253,55 @@ bloom_add:
     pop     rbx
     ret
 
-; rsi -> rdi: ящик 7 (края прижаты), тексели по 4 слова
-; r8 = шаг вдоль, r9 = поперёк (байты), r10d = длина, r11d = линий
-; скользящая сумма: +src[min(p+4, n−1)] − src[max(p−3, 0)]
-blur_box:
+; ящик 7 (края прижаты) по линиям: bb_src -> bb_dst, тексели по 4 слова; bb_al — шаг
+; вдоль (байты), bb_ac — поперёк, bb_len — длина. Скользящая сумма:
+; +src[min(p+4, n−1)] − src[max(p−3, 0)]. Линии — парами, пара в одном xmm (те же
+; операции над словами); ecx .. edx−1 — пары (с любого потока пула)
+blur_lines:
     push    rbx
+    push    rsi
+    push    rdi
     push    r12
     push    r13
     push    r14
     push    r15
-    mov     [bb_lines], r11d
+    push    rbp
+    mov     ebp, edx
+    mov     rsi, [bb_src]
+    mov     rdi, [bb_dst]
+    mov     r8, [bb_al]
+    mov     r9, [bb_ac]
+    mov     r10d, [bb_len]
     movdqa  xmm7, [w_div7]
     lea     r15d, [r10d - 1]
     imul    r15, r8                     ; смещение последнего
-    xor     r12d, r12d
+    mov     r12d, ecx
 .ln:
-    mov     eax, r12d
+    lea     rax, [r12 + r12]
     imul    rax, r9
     lea     rbx, [rsi + rax]
     lea     r14, [rdi + rax]
-    ; сумма для p = 0: 4·s[0] + s[1] + s[2] + s[3]
+    ; сумма для p = 0: 4·s[0] + s[1] + s[2] + s[3] (у второй линии — в старшей половине)
     movq    xmm0, [rbx]
+    movhps  xmm0, [rbx + r9]
     movdqa  xmm2, xmm0                  ; s[0] — левый край
     psllw   xmm0, 2
-    movq    xmm1, [rbx + r8]
+    lea     rax, [rbx + r8]
+    movq    xmm1, [rax]
+    movhps  xmm1, [rax + r9]
     paddw   xmm0, xmm1
-    movq    xmm1, [rbx + r8*2]
+    add     rax, r8
+    movq    xmm1, [rax]
+    movhps  xmm1, [rax + r9]
     paddw   xmm0, xmm1
-    lea     rax, [r8 + r8*2]
-    movq    xmm1, [rbx + rax]
+    add     rax, r8
+    movq    xmm1, [rax]
+    movhps  xmm1, [rax + r9]
     paddw   xmm0, xmm1
     movq    xmm3, [rbx + r15]           ; правый край
+    add     r15, r9
+    movhps  xmm3, [rbx + r15]
+    sub     r15, r9
     xor     r13d, r13d
     mov     rcx, r14                    ; куда писать
     lea     rdx, [rbx + r8*4]           ; входящий s[p+4]
@@ -284,6 +310,7 @@ blur_box:
     movdqa  xmm1, xmm0
     pmulhuw xmm1, xmm7
     movq    [rcx], xmm1
+    movhps  [rcx + r9], xmm1
     add     rcx, r8
     ; входящий
     lea     eax, [r13d + 4]
@@ -293,6 +320,7 @@ blur_box:
     jmp     .ina
 .in:
     movq    xmm1, [rdx]
+    movhps  xmm1, [rdx + r9]
     add     rdx, r8
 .ina:
     paddw   xmm0, xmm1
@@ -303,6 +331,7 @@ blur_box:
     jmp     .nx
 .out3:
     movq    xmm1, [r11]
+    movhps  xmm1, [r11 + r9]
     psubw   xmm0, xmm1
     add     r11, r8
 .nx:
@@ -310,12 +339,15 @@ blur_box:
     cmp     r13d, r10d
     jb      .ps
     inc     r12d
-    cmp     r12d, [bb_lines]
+    cmp     r12d, ebp
     jb      .ln
+    pop     rbp
     pop     r15
     pop     r14
     pop     r13
     pop     r12
+    pop     rdi
+    pop     rsi
     pop     rbx
     ret
 

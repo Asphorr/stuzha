@@ -527,6 +527,10 @@ lg_soften:
 floor_pass:
     sub     rsp, 40
     lea     rcx, [floor_rows]
+    cmp     dword [have_avx2], 0
+    je      .sse
+    lea     rcx, [floor_rows_x]         ; то же на AVX2, по 8 пикселей
+.sse:
     mov     edx, SCR_H
     mov     r8d, 8
     call    par_for
@@ -787,6 +791,394 @@ floor_rows:
     pop     r14
     pop     r13
     pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; ---------------------------------------------------------------- пол на AVX2
+; floor_rows по 8 пикселей. Числа пикселя — дворд на дорожку, цвет — по каналу
+; (B, G, R) двордами: у floor_rows слова не выходят за 2^15 (и не уходят в минус),
+; так что те же сложения, сдвиги и насыщение к 0..255 дают те же байты. Развилки
+; (пустота, снег, дорога, доски, лёд, искра, следы, рельеф, кровь) — масками
+section .rdata
+align 32, db 0
+fl_lane:    dd 0, 8, 16, 24, 32, 40, 48, 56
+fl_hi:      times 8 dd 0xFFFF8000
+fl_ff00ff:  times 8 dd 0x00FF00FF
+fl_255:     times 8 dd 255
+fl_safe:    times 8 dd DECW + 1         ; ячейка следов для пустоты (соседи — в массиве)
+fl_nbs:     db 0, 4, 8, 12, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128
+            db 0, 4, 8, 12, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128
+fl_glk:     times 8 dd 0x2545F491
+fl_fl0:     times 8 dd 0x01000000
+fl_fls:     times 8 dd 0x40000000       ; искра
+fl_m8:      times 8 dd -8
+fl_2:       times 8 dd 2
+fl_3:       times 8 dd 3
+fl_4:       times 8 dd 4
+fl_5:       times 8 dd 5
+fl_6:       times 8 dd 6
+fl_7:       times 8 dd 7
+fl_8:       times 8 dd 8
+fl_10:      times 8 dd 10
+fl_14:      times 8 dd 14
+fl_15:      times 8 dd 15
+fl_16:      times 8 dd 16
+fl_31:      times 8 dd 31
+fl_40:      times 8 dd 40
+fl_63:      times 8 dd 63
+fl_64:      times 8 dd 64
+fl_72:      times 8 dd 72
+fl_97:      times 8 dd 97
+fl_112:     times 8 dd 112
+fl_198:     times 8 dd 198
+fl_240:     times 8 dd 240
+fl_256:     times 8 dd 256
+fl_t44:     times 8 dd 44               ; следы: trk_mul
+fl_t58:     times 8 dd 58
+fl_t72:     times 8 dd 72
+fl_bb:      times 8 dd 22 << 16         ; кровь: blood_col << 16
+fl_bg:      times 8 dd 14 << 16
+fl_br:      times 8 dd 110 << 16
+
+section .text
+; HASH над дорожками: %1 = HASH(%1, %2) (портит %2)
+%macro HASHV 2
+    vpmulld %1, %1, [lt_hx]
+    vpmulld %2, %2, [lt_hy]
+    vpxor   %1, %1, %2
+    vpsrld  %2, %1, 15
+    vpxor   %1, %1, %2
+    vpmulld %1, %1, [lt_hm]
+    vpsrld  %2, %1, 13
+    vpxor   %1, %1, %2
+%endmacro
+
+; канал: %1 = clamp(%1, 0, 255), потом кровь — (x·(256 − b) + b·цвет) >> 8 одним
+; vpmaddwd: ymm8 = 256 − b, ymm9 = b << 16, %2 — цвет << 16 (портит ymm14)
+%macro FLBLOOD 2
+    vpxor   ymm14, ymm14, ymm14
+    vpmaxsd %1, %1, ymm14
+    vpminsd %1, %1, [fl_255]
+    vpor    %1, %1, ymm9
+    vpor    ymm14, ymm8, [%2]
+    vpmaddwd %1, %1, ymm14
+    vpsrld  %1, %1, 8
+%endmacro
+
+FX_B        equ 0                       ; свой кадр (выровнен на 32)
+FX_G        equ 32
+FX_R        equ 64
+FX_FL       equ 96                      ; флаги альбедо
+FX_N        equ 128                     ; нормаль
+FX_SNOW     equ 160                     ; снег (не дорога)
+FX_WOOD     equ 192                     ; доски
+FX_SZ       equ 224
+
+; строки ecx .. edx−1 — как floor_rows (с любого потока пула)
+floor_rows_x:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    rbp
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    mov     rbp, rsp
+    sub     rsp, FX_SZ
+    and     rsp, -32
+    mov     r12d, ecx                   ; строка
+    mov     r13d, edx                   ; конец
+    lea     rbx, [albedo]
+    lea     r14, [tprop]
+    lea     r15, [gn_lut]
+.row:
+    imul    eax, r12d, SCR_W
+    lea     rdi, [rbx + rax*4]
+    lea     rsi, [rbx + rax + (nbuf - albedo)]
+    mov     eax, r12d
+    sub     eax, CY0
+    shl     eax, 4
+    mov     ecx, [camx]
+    add     ecx, eax
+    sub     ecx, 8*CX0
+    mov     edx, [camy]
+    add     edx, eax
+    add     edx, 8*CX0
+    vmovd   xmm0, ecx
+    vpbroadcastd ymm0, xmm0
+    vpaddd  ymm0, ymm0, [fl_lane]       ; wx: +8 на пиксель
+    vmovd   xmm1, edx
+    vpbroadcastd ymm1, xmm1
+    vpsubd  ymm1, ymm1, [fl_lane]       ; wy: −8
+    mov     r8d, SCR_W/8
+.grp:
+    ; пустота: wx или wy вне 0..32767
+    vpor    ymm2, ymm0, ymm1
+    vpand   ymm2, ymm2, [fl_hi]
+    vpxor   ymm3, ymm3, ymm3
+    vpcmpeqd ymm2, ymm2, ymm3           ; пол есть
+    vptest  ymm2, ymm2
+    jz      .void
+    vpslld  ymm3, ymm1, 16
+    vpor    ymm3, ymm3, ymm0
+    vpand   ymm3, ymm3, ymm2
+    vmovdqu [rdi + (gposb - albedo)], ymm3
+    ; вид пола: tprop[tmap[тайл]] >> 4 (0 снег, 2 доски, прочее — дорога)
+    vpsrld  ymm3, ymm1, 8
+    vpslld  ymm3, ymm3, 7
+    vpsrld  ymm4, ymm0, 8
+    vpaddd  ymm3, ymm3, ymm4
+    vpand   ymm3, ymm3, ymm2            ; пустоте — тайл 0
+    vpcmpeqd ymm5, ymm5, ymm5
+    vpxor   ymm4, ymm4, ymm4
+    vpgatherdd ymm4, [rbx + ymm3*1 + (tmap - albedo)], ymm5
+    vpand   ymm4, ymm4, [fl_255]
+    vpcmpeqd ymm5, ymm5, ymm5
+    vpxor   ymm3, ymm3, ymm3
+    vpgatherdd ymm3, [r14 + ymm4*1], ymm5
+    vpand   ymm4, ymm3, [fl_255]
+    vpsrld  ymm4, ymm4, 4
+    vpxor   ymm5, ymm5, ymm5
+    vpcmpeqd ymm5, ymm5, ymm4           ; снег
+    vmovdqa [rsp + FX_SNOW], ymm5
+    vpcmpeqd ymm4, ymm4, [fl_2]
+    vmovdqa [rsp + FX_WOOD], ymm4
+    ; ячейка следов, крови и рельефа (8 на тайл)
+    vpsrld  ymm3, ymm1, 5
+    vpslld  ymm3, ymm3, 10
+    vpsrld  ymm6, ymm0, 5
+    vpaddd  ymm3, ymm3, ymm6
+    vmovdqa ymm6, [fl_safe]
+    vpblendvb ymm3, ymm6, ymm3, ymm2
+    ; ----- снег и укатанная дорога: хеши ячеек 1/16 и 1/2 тайла
+    vpsrld  ymm7, ymm0, 4
+    vpsrld  ymm8, ymm1, 4
+    HASHV   ymm7, ymm8                  ; r10
+    vpsrld  ymm8, ymm0, 7
+    vpsrld  ymm9, ymm1, 7
+    HASHV   ymm8, ymm9                  ; r11
+    vpand   ymm9, ymm7, [fl_7]
+    vpand   ymm10, ymm8, [fl_15]
+    vpaddd  ymm9, ymm9, ymm10
+    vmovdqa ymm10, [fl_198]
+    vpblendvb ymm10, ymm10, [fl_240], ymm5
+    vpsubd  ymm9, ymm10, ymm9           ; c
+    vpaddd  ymm10, ymm9, [fl_10]        ; + snow_off
+    vpaddd  ymm11, ymm9, [fl_3]
+    vpsubd  ymm12, ymm9, [fl_3]
+    ; лёд на дороге: ((r11 >> 8) & 7) = 0
+    vpsrld  ymm13, ymm8, 8
+    vpand   ymm13, ymm13, [fl_7]
+    vpxor   ymm14, ymm14, ymm14
+    vpcmpeqd ymm13, ymm13, ymm14
+    vpandn  ymm13, ymm5, ymm13
+    vpand   ymm14, ymm13, [fl_14]
+    vpaddd  ymm10, ymm10, ymm14
+    vpand   ymm14, ymm13, [fl_6]
+    vpaddd  ymm11, ymm11, ymm14
+    ; следы: дворд с ячейки слева — байты t[−1], t, t[+1]
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm13, ymm13, ymm13
+    vpgatherdd ymm13, [rbx + ymm3*1 + (tracks - albedo) - 1], ymm15
+    vpsrld  ymm14, ymm13, 8
+    vpand   ymm14, ymm14, [fl_255]      ; t
+    vpmaddwd ymm15, ymm14, [fl_t44]
+    vpsrld  ymm15, ymm15, 8
+    vpsubd  ymm10, ymm10, ymm15
+    vpmaddwd ymm15, ymm14, [fl_t58]
+    vpsrld  ymm15, ymm15, 8
+    vpsubd  ymm11, ymm11, ymm15
+    vpmaddwd ymm15, ymm14, [fl_t72]
+    vpsrld  ymm15, ymm15, 8
+    vpsubd  ymm12, ymm12, ymm15
+    ; искра на снегу: ((r10 ^ glint)·0x2545F491) >> 24 < 3
+    vpbroadcastd ymm15, [glint]
+    vpxor   ymm15, ymm15, ymm7
+    vpmulld ymm15, ymm15, [fl_glk]
+    vpsrld  ymm15, ymm15, 24
+    vmovdqa ymm6, [fl_3]
+    vpcmpgtd ymm15, ymm6, ymm15
+    vpand   ymm15, ymm15, ymm5
+    vpand   ymm6, ymm15, [fl_14]
+    vpaddd  ymm10, ymm10, ymm6
+    vpaddd  ymm11, ymm11, ymm6
+    vpaddd  ymm12, ymm12, ymm6
+    vmovdqa [rsp + FX_B], ymm10
+    vmovdqa [rsp + FX_G], ymm11
+    vmovdqa [rsp + FX_R], ymm12
+    vpand   ymm6, ymm15, [fl_fls]
+    vpor    ymm6, ymm6, [fl_fl0]
+    vmovdqa [rsp + FX_FL], ymm6
+    ; нормаль: без следов по соседству — готовая из карты (байт 3)
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm6, ymm6, ymm6
+    vpgatherdd ymm6, [rbx + ymm3*4 + (drift - albedo)], ymm15
+    vpsrld  ymm7, ymm6, 24
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm8, ymm8, ymm8
+    vpgatherdd ymm8, [rbx + ymm3*1 + (tracks - albedo) - DECW], ymm15
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm9, ymm9, ymm9
+    vpgatherdd ymm9, [rbx + ymm3*1 + (tracks - albedo) + DECW], ymm15
+    vpand   ymm8, ymm8, [fl_255]        ; t[−DECW]
+    vpand   ymm9, ymm9, [fl_255]        ; t[+DECW]
+    vpand   ymm10, ymm13, [fl_ff00ff]
+    vpor    ymm10, ymm10, ymm8
+    vpor    ymm10, ymm10, ymm9
+    vpxor   ymm11, ymm11, ymm11
+    vpcmpeqd ymm10, ymm10, ymm11        ; следов рядом нет
+    vpandn  ymm11, ymm10, ymm2
+    vptest  ymm11, ymm11
+    jz      .nrel
+    ; со следами: наклон из карты + стенки следов, прижать, q5, gn_lut
+    vpslld  ymm11, ymm6, 16
+    vpsrad  ymm11, ymm11, 24            ; nx
+    vpsrld  ymm12, ymm13, 16
+    vpand   ymm12, ymm12, [fl_255]      ; t[+1]
+    vpand   ymm14, ymm13, [fl_255]      ; t[−1]
+    vpsubd  ymm12, ymm12, ymm14
+    vpsrad  ymm12, ymm12, 4
+    vpaddd  ymm11, ymm11, ymm12
+    vpslld  ymm12, ymm6, 8
+    vpsrad  ymm12, ymm12, 24            ; ny
+    vpsubd  ymm9, ymm9, ymm8
+    vpsrad  ymm9, ymm9, 4
+    vpaddd  ymm12, ymm12, ymm9
+    vpmaxsd ymm11, ymm11, [fl_m8]
+    vpmaxsd ymm12, ymm12, [fl_m8]
+    vpminsd ymm11, ymm11, [fl_7]
+    vpminsd ymm12, ymm12, [fl_7]
+    vpaddd  ymm11, ymm11, [fl_8]
+    vpaddd  ymm12, ymm12, [fl_8]
+    vbroadcasti128 ymm14, [q5]
+    vpshufb ymm11, ymm14, ymm11         ; q5[nx] (q5[0] = 0 — старшие байты дворда)
+    vpshufb ymm12, ymm14, ymm12         ; q5[ny]
+    vpslld  ymm9, ymm12, 2
+    vpaddd  ymm9, ymm9, ymm12
+    vpaddd  ymm9, ymm9, ymm11
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm8, ymm8, ymm8
+    vpgatherdd ymm8, [r15 + ymm9*1], ymm15
+    vpand   ymm8, ymm8, [fl_255]
+    vpblendvb ymm7, ymm8, ymm7, ymm10
+.nrel:
+    vmovdqa [rsp + FX_N], ymm7
+    ; ----- дощатый пол
+    vmovdqa ymm4, [rsp + FX_WOOD]
+    vpand   ymm4, ymm4, ymm2
+    vptest  ymm4, ymm4
+    jz      .nwood
+    vpsrld  ymm7, ymm1, 6               ; доска
+    vpmulld ymm8, ymm7, [fl_97]
+    vpaddd  ymm8, ymm8, ymm0            ; x со сдвигом стыков
+    vpsrld  ymm9, ymm8, 8
+    vmovdqa ymm10, ymm7
+    HASHV   ymm9, ymm10
+    vpsrld  ymm10, ymm0, 2
+    vmovdqa ymm11, ymm7
+    HASHV   ymm10, ymm11
+    vpand   ymm9, ymm9, [fl_31]
+    vpsubd  ymm9, ymm9, [fl_16]
+    vpand   ymm10, ymm10, [fl_7]
+    vpaddd  ymm9, ymm9, ymm10           ; разброс
+    vpmulld ymm10, ymm9, [fl_3]         ; · wood_var >> 3, + wood_base
+    vpsrad  ymm10, ymm10, 3
+    vpaddd  ymm10, ymm10, [fl_40]
+    vpmulld ymm11, ymm9, [fl_5]
+    vpsrad  ymm11, ymm11, 3
+    vpaddd  ymm11, ymm11, [fl_72]
+    vpmulld ymm12, ymm9, [fl_7]
+    vpsrad  ymm12, ymm12, 3
+    vpaddd  ymm12, ymm12, [fl_112]
+    ; стык: (wy & 63) < 4 или (x & 255) < 3 — вдвое темнее
+    vpand   ymm13, ymm1, [fl_63]
+    vmovdqa ymm14, [fl_4]
+    vpcmpgtd ymm13, ymm14, ymm13
+    vpand   ymm14, ymm8, [fl_255]
+    vmovdqa ymm15, [fl_3]
+    vpcmpgtd ymm14, ymm15, ymm14
+    vpor    ymm13, ymm13, ymm14
+    vpsrld  ymm14, ymm10, 1
+    vpblendvb ymm10, ymm10, ymm14, ymm13
+    vpsrld  ymm14, ymm11, 1
+    vpblendvb ymm11, ymm11, ymm14, ymm13
+    vpsrld  ymm14, ymm12, 1
+    vpblendvb ymm12, ymm12, ymm14, ymm13
+    vmovdqa ymm4, [rsp + FX_WOOD]
+    vmovdqa ymm14, [rsp + FX_B]
+    vpblendvb ymm14, ymm14, ymm10, ymm4
+    vmovdqa [rsp + FX_B], ymm14
+    vmovdqa ymm14, [rsp + FX_G]
+    vpblendvb ymm14, ymm14, ymm11, ymm4
+    vmovdqa [rsp + FX_G], ymm14
+    vmovdqa ymm14, [rsp + FX_R]
+    vpblendvb ymm14, ymm14, ymm12, ymm4
+    vmovdqa [rsp + FX_R], ymm14
+    vmovdqa ymm14, [rsp + FX_FL]
+    vpblendvb ymm14, ymm14, [fl_fl0], ymm4
+    vmovdqa [rsp + FX_FL], ymm14
+    vmovdqa ymm14, [rsp + FX_N]
+    vpandn  ymm14, ymm4, ymm14          ; пол ровный
+    vmovdqa [rsp + FX_N], ymm14
+.nwood:
+    ; ----- кровь: (x·(256 − b) + b·blood_col) >> 8; без крови (b = 0) — x
+    vpcmpeqd ymm15, ymm15, ymm15
+    vpxor   ymm9, ymm9, ymm9
+    vpgatherdd ymm9, [rbx + ymm3*1 + (blood - albedo)], ymm15
+    vpand   ymm9, ymm9, [fl_255]
+    vmovdqa ymm8, [fl_256]
+    vpsubd  ymm8, ymm8, ymm9            ; 256 − b
+    vpslld  ymm9, ymm9, 16              ; b << 16
+    vmovdqa ymm10, [rsp + FX_B]
+    FLBLOOD ymm10, fl_bb
+    vmovdqa ymm11, [rsp + FX_G]
+    FLBLOOD ymm11, fl_bg
+    vmovdqa ymm12, [rsp + FX_R]
+    FLBLOOD ymm12, fl_br
+    ; альбедо: B | G << 8 | R << 16 | флаги; пустота — 0
+    vpslld  ymm11, ymm11, 8
+    vpslld  ymm12, ymm12, 16
+    vpor    ymm10, ymm10, ymm11
+    vpor    ymm10, ymm10, ymm12
+    vpor    ymm10, ymm10, [rsp + FX_FL]
+    vpand   ymm10, ymm10, ymm2
+    vmovdqu [rdi], ymm10
+    ; нормаль — байтами; у пустоты — прежняя
+    vmovdqa ymm7, [rsp + FX_N]
+    vpshufb ymm7, ymm7, [fl_nbs]
+    vextracti128 xmm8, ymm7, 1
+    vpunpckldq xmm7, xmm7, xmm8
+    vpshufb ymm9, ymm2, [fl_nbs]
+    vextracti128 xmm8, ymm9, 1
+    vpunpckldq xmm9, xmm9, xmm8
+    vmovq   xmm8, [rsi]
+    vpblendvb xmm7, xmm8, xmm7, xmm9
+    vmovq   [rsi], xmm7
+    jmp     .next
+.void:
+    vpxor   ymm3, ymm3, ymm3
+    vmovdqu [rdi], ymm3
+    vmovdqu [rdi + (gposb - albedo)], ymm3
+.next:
+    add     rdi, 32
+    add     rsi, 8
+    vpaddd  ymm0, ymm0, [fl_64]         ; 8 пикселей: wx += 64, wy −= 64
+    vpsubd  ymm1, ymm1, [fl_64]
+    dec     r8d
+    jnz     .grp
+    inc     r12d
+    cmp     r12d, r13d
+    jb      .row
+    vzeroupper
+    mov     rsp, rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbp
     pop     rdi
     pop     rsi
     pop     rbx

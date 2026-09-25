@@ -242,16 +242,9 @@ obj_job:
 .l:
     cmp     ebx, esi
     jae     .out
-    imul    eax, ebx, SCR_H             ; полоса k: строки SCR_H·k/NBANDS .. SCR_H·(k+1)/NBANDS
-    mov     r8d, NBANDS
-    xor     edx, edx
-    div     r8d
-    mov     ecx, eax
-    lea     eax, [rbx + 1]
-    imul    eax, eax, SCR_H
-    xor     edx, edx
-    div     r8d
-    mov     edx, eax
+    lea     rax, [band_y]               ; полоса k: строки band_y[k] .. band_y[k+1]
+    mov     ecx, [rax + rbx*4]
+    mov     edx, [rax + rbx*4 + 4]
     lea     rax, [band_tab]
     imul    r8d, ebx, BT_SZ
     call    [rax + r8]
@@ -264,7 +257,9 @@ obj_job:
     ret
 
 ; после полос: закрыла ли крыша фигуру игрока — в какой-нибудь полосе (для окна
-; в крыше со следующего кадра, HS_OCC); самая долгая полоса -> band_tmax
+; в крыше со следующего кадра, HS_OCC); самая долгая полоса -> band_tmax; границы
+; полос на следующий кадр — поровну времени по замеру этого (кадр от них не зависит)
+BAND_MINH   equ 8                       ; полоса не тоньше, строк
 band_merge:
     lea     rdx, [houses]
     xor     ecx, ecx
@@ -286,21 +281,96 @@ band_merge:
     jmp     .h
 .t:
     xor     eax, eax
+    xorps   xmm5, xmm5                  ; сумма
     lea     r8, [band_tab + 16]
-    mov     r9d, NBANDS
+    lea     r11, [band_tk]
+    xor     r9d, r9d
 .tb:
     mov     r10, [r8]
     mov     rcx, [r10 + 8]
     sub     rcx, [r10]
     cmp     rcx, rax
     cmova   rax, rcx
+    cvtsi2ss xmm0, rcx
+    movss   [r11 + r9*4], xmm0
+    addss   xmm5, xmm0
     add     r8, BT_SZ
-    dec     r9d
-    jnz     .tb
+    inc     r9d
+    cmp     r9d, NBANDS
+    jb      .tb
     mov     [band_tmax], rax
+    comiss  xmm5, [f_1]
+    jb      .out
+    ; стоимость строки в полосе — её время / высота; граница j — где набралось
+    ; T·j/NBANDS, и к ней — полпути от нынешней (без раскачки)
+    mov     eax, NBANDS
+    cvtsi2ss xmm7, eax
+    lea     rdx, [band_y]
+    lea     r10, [band_ny]
+    mov     r9d, 1
+.j:
+    cvtsi2ss xmm6, r9d
+    mulss   xmm6, xmm5
+    divss   xmm6, xmm7                  ; сколько времени — до границы
+    xor     ecx, ecx
+.k:
+    movss   xmm0, [r11 + rcx*4]
+    cmp     ecx, NBANDS - 1
+    je      .in
+    comiss  xmm6, xmm0
+    jbe     .in
+    subss   xmm6, xmm0
+    inc     ecx
+    jmp     .k
+.in:
+    maxss   xmm0, [f_1]
+    divss   xmm6, xmm0
+    minss   xmm6, [f_1]                 ; доля полосы k
+    mov     eax, [rdx + rcx*4 + 4]
+    sub     eax, [rdx + rcx*4]
+    cvtsi2ss xmm0, eax
+    mulss   xmm6, xmm0
+    cvtsi2ss xmm0, dword [rdx + rcx*4]
+    addss   xmm6, xmm0
+    cvtsi2ss xmm0, dword [rdx + r9*4]
+    addss   xmm6, xmm0
+    mulss   xmm6, [f_0_5]
+    cvtss2si eax, xmm6
+    mov     [r10 + r9*4], eax
+    inc     r9d
+    cmp     r9d, NBANDS
+    jb      .j
+    ; по порядку и не тоньше BAND_MINH
+    mov     r9d, 1
+.c:
+    mov     eax, [r10 + r9*4]
+    mov     ecx, [rdx + r9*4 - 4]
+    add     ecx, BAND_MINH
+    cmp     eax, ecx
+    cmovl   eax, ecx
+    mov     ecx, NBANDS
+    sub     ecx, r9d
+    imul    ecx, ecx, -BAND_MINH
+    add     ecx, SCR_H
+    cmp     eax, ecx
+    cmovg   eax, ecx
+    mov     [rdx + r9*4], eax
+    inc     r9d
+    cmp     r9d, NBANDS
+    jb      .c
+.out:
     ret
 
 section .data
 align 8, db 0
 band_tmax:  dq 0                        ; тики самой долгой полосы кадра (--bench)
+band_y:                                 ; границы полос, строки (первая 0, последняя SCR_H)
+%assign i 0
+%rep NBANDS + 1
+    dd SCR_H * i / NBANDS
+%assign i i + 1
+%endrep
+section .bss
+band_tk:    resd NBANDS                 ; время полос, f32
+band_ny:    resd NBANDS + 1
 section .text

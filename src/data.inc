@@ -837,6 +837,7 @@ wv_th:      dd 0.0                      ; куда дует, рад (0 — к +x
 wsh_th:     dd 99.0                     ; при каком направлении считано затишье
 wnd_base:   dd 0.12                     ; средняя сила по погоде
 wnd_snow:   dd 0.15                     ; снегопад 0..1
+wg_on:      dd 1                        ; маска позёмки не нулевая (build_wgrid)
 wnd_gust:   dd 0.25                     ; размах порывов по месту
 wnd_wo:     dd 0.0                      ; мгла 0..1
 gst_ox:     dd 0.0                      ; сдвиг пятен порывов, тайлы
@@ -973,7 +974,12 @@ tv_lvl:     dd 0.6
 tv_hue:     dd 0
 tv_pane:    dd 0x81FFE8D0
 breath_add: dd 0x00404040
-bb_lines:   dd 0
+bb_len:     dd 0                        ; blur_lines: длина линии, текселей
+align 8, db 0
+bb_src:     dq 0                        ;             откуда, куда
+bb_dst:     dq 0
+bb_al:      dq 0                        ;             шаг вдоль и поперёк, байты
+bb_ac:      dq 0
 ; заслонители фонарика
 nocc:       dd 0
 ; развёртка теней луны
