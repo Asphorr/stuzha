@@ -17,7 +17,7 @@
 ; ----------------------------------------------------------------------------
 section .text
 
-HQMAX   equ 128                         ; команд HUD на кадр
+HQMAX   equ 192                         ; команд HUD на кадр
 HQSZ    equ 160
 HQ_T    equ 0                           ; 1 — текст, 2 — фигура
 HQ_F    equ 4                           ; текст: шрифт (| FT_NOSH — без тени)
@@ -51,7 +51,7 @@ FT_MID  equ 6                           ;   поэтому строка итог
 NFT     equ 7
 FT_NOSH equ 0x100
 FN_SZ   equ 24                          ; fn_def: кегль (единицы), жирность, курсив, имя
-NCH     equ 166                         ; знаков: ASCII, А..я, Ё ё и gc_ext
+NCH     equ 167                         ; знаков: ASCII, А..я, Ё ё и gc_ext
 GC_SZ   equ 8*1024*1024                 ; кэш глифов
 GR_W    equ 512                         ; холст растеризации глифа (квадрат)
 
@@ -1572,6 +1572,7 @@ hud_build:
     call    hd_wind
     call    hd_score
     call    hd_vitals
+    call    hd_loot
     cmp     dword [gstate], 1
     je      .dead
     cmp     dword [gstate], 2
@@ -2081,6 +2082,192 @@ hd_bar:
     pop     rbx
     ret
 
+; значок запаса: фигура со сдвигом от hl_cx — dx, ay, bx, by, r, вид, цвет
+%macro HLI 7
+    movss   xmm0, [hl_cx]
+    mov     dword [hs_ax], __float32__(%1)
+    addss   xmm0, [hs_ax]
+    movss   [hs_ax], xmm0
+    mov     dword [hs_ay], __float32__(%2)
+    mov     dword [hs_bx], __float32__(%3)
+    mov     dword [hs_by], __float32__(%4)
+    mov     dword [hs_r], __float32__(%5)
+    SHP     %6, %7
+%endmacro
+; то же отрезком: оба конца — сдвиги от hl_cx (dx1, y1, dx2, y2, r, цвет)
+%macro HLC 6
+    movss   xmm0, [hl_cx]
+    mov     dword [hs_ax], __float32__(%1)
+    addss   xmm0, [hs_ax]
+    movss   [hs_ax], xmm0
+    movss   xmm0, [hl_cx]
+    mov     dword [hs_bx], __float32__(%3)
+    addss   xmm0, [hs_bx]
+    movss   [hs_bx], xmm0
+    mov     dword [hs_ay], __float32__(%2)
+    mov     dword [hs_by], __float32__(%4)
+    mov     dword [hs_r], __float32__(%5)
+    SHP     SH_CAP, %6
+%endmacro
+
+; лут: запас справа внизу (клавиша 1..4, значок, «×N»), по центру — сообщение о
+; находке и подсказка «E взять …» / «E обыскать …»
+hd_loot:
+    push    rbx
+    push    rsi
+    push    rdi
+    sub     rsp, 48
+    cmp     dword [gstate], 0
+    jne     .out
+    ; ----- запас
+    xor     ecx, ecx
+    xor     eax, eax
+    lea     rdx, [inv]
+.cnt:
+    cmp     dword [rdx + rax*4], 0
+    je      .c1
+    inc     ecx
+.c1:
+    inc     eax
+    cmp     eax, NLT
+    jb      .cnt
+    test    ecx, ecx
+    jz      .msg
+    ; подложка под ряд: слот — 34 единицы, ряд прижат к 628
+    imul    ecx, ecx, 34
+    cvtsi2ss xmm0, ecx
+    mulss   xmm0, [hc_half]
+    movss   xmm1, [hc_628]
+    subss   xmm1, xmm0
+    movss   [hs_ax], xmm1
+    addss   xmm0, [hc_6]
+    movss   [hs_bx], xmm0
+    mov     dword [hs_ay], __float32__(338.0)
+    mov     dword [hs_by], __float32__(8.0)
+    mov     dword [hs_r], 0
+    mov     dword [hs_sf], __float32__(22.0)
+    SHP     SH_SOFT, 0x8C04060A
+    mov     dword [hl_x], __float32__(594.0)
+    mov     ebx, NLT
+.slot:
+    dec     ebx
+    js      .msg
+    lea     rdx, [inv]
+    mov     esi, [rdx + rbx*4]
+    test    esi, esi
+    jz      .slot
+    ; клавиша
+    movss   xmm0, [hl_x]
+    addss   xmm0, [hc_4]
+    movss   [hs_ax], xmm0
+    movss   [hq_tx], xmm0
+    mov     dword [hs_ay], __float32__(338.0)
+    mov     dword [hs_bx], __float32__(3.4)
+    mov     dword [hs_by], __float32__(5.0)
+    mov     dword [hs_r], __float32__(1.4)
+    SHP     SH_BOX, 0xCC0E121A
+    mov     dword [hs_rw], __float32__(0.3)
+    SHP     SH_BOX, 0xE696A6BA
+    mov     dword [hq_ty], __float32__(333.8)
+    lea     rdx, [hl_keys]
+    mov     r8, [rdx + rbx*8]
+    mov     ecx, FT_KEY | FT_NOSH
+    mov     edx, 1
+    mov     r9d, C_WHITE
+    call    hq_text
+    ; значок
+    movss   xmm0, [hl_x]
+    addss   xmm0, [hc_13]
+    movss   [hl_cx], xmm0
+    cmp     ebx, 1
+    jb      .ibat
+    je      .iband
+    cmp     ebx, 2
+    je      .itea
+    ; тушёнка: банка с полосой и крышкой
+    HLI     0.0, 338.7, 3.2, 2.8, 0.7, SH_BOX, 0xFFC89838
+    HLI     0.0, 339.1, 3.2, 0.8, 0.0, SH_BOX, 0xFF8A2A20
+    HLI     0.0, 335.9, 3.2, 0.55, 0.3, SH_BOX, 0xFFD0D4D8
+    jmp     .num
+.ibat:
+    ; плоская батарейка: половины красная и синяя, латунные язычки
+    HLI     -1.7, 339.0, 1.7, 2.6, 0.4, SH_BOX, 0xFFB83028
+    HLI     1.7, 339.0, 1.7, 2.6, 0.4, SH_BOX, 0xFF2A4A9A
+    HLI     -1.5, 335.6, 0.5, 0.9, 0.0, SH_BOX, 0xFFD8B050
+    HLI     1.5, 335.6, 0.5, 0.9, 0.0, SH_BOX, 0xFFD8B050
+    jmp     .num
+.iband:
+    ; бинт: рулон с дыркой
+    HLI     0.0, 338.2, 0.0, 0.0, 3.4, SH_CIRC, 0xFFE8E6DE
+    HLI     0.0, 338.2, 0.0, 0.0, 1.2, SH_CIRC, 0xFF8E8A80
+    jmp     .num
+.itea:
+    ; термос: красная колба, серая крышка
+    HLC     0.0, 336.0, 0.0, 340.8, 2.0, 0xFFB83A2E
+    HLI     0.0, 333.5, 1.6, 1.0, 0.4, SH_BOX, 0xFFC8D0D8
+.num:
+    lea     rdi, [tbuf]
+    mov     word [rdi], 0xD7
+    add     rdi, 2
+    mov     eax, esi
+    call    wput_num
+    movss   xmm0, [hl_x]
+    addss   xmm0, [hc_18]
+    movss   [hq_tx], xmm0
+    mov     dword [hq_ty], __float32__(333.8)
+    TXTP    FT_TXT, 0, tbuf, C_WHITE
+    movss   xmm0, [hl_x]
+    subss   xmm0, [hc_34]
+    movss   [hl_x], xmm0
+    jmp     .slot
+.msg:
+    ; ----- сообщение: гаснет за последние полсекунды
+    movss   xmm0, [lm_t]
+    comiss  xmm0, [hc_0]
+    jbe     .prompt
+    addss   xmm0, xmm0
+    minss   xmm0, [hc_1]
+    mulss   xmm0, [hc_256]
+    cvttss2si eax, xmm0
+    mov     [hq_fade], eax
+    HSP     320.0, 297.5, 64.0, 5.5, 0.0, 0.0, 22.0
+    SHP     SH_SOFT, 0x8C04060A
+    TXT     FT_TXT, 1, 320.0, 292.5, lm_buf, C_WHITE
+    mov     dword [hq_fade], 256
+.prompt:
+    ; ----- подсказка
+    cmp     dword [lp_kind], 0
+    je      .out
+    lea     rdi, [tbuf]
+    cmp     dword [lp_kind], 1
+    jne     .pc
+    lea     rsi, [ts_take]
+    call    wput_str
+    mov     eax, [lp_type]
+    lea     rdx, [lo_names]
+    mov     rsi, [rdx + rax*8 - 8]
+    call    wput_str
+    jmp     .pk
+.pc:
+    mov     eax, [lp_type]
+    lea     rdx, [lo_cask]
+    mov     rsi, [rdx + rax*8 - 8]
+    call    wput_str
+.pk:
+    HSP     320.0, 311.0, 56.0, 6.0, 0.0, 0.0, 22.0
+    SHP     SH_SOFT, 0x8C04060A
+    mov     dword [hk_lc], C_WHITE
+    mov     dword [hk_y], __float32__(305.5)
+    lea     rcx, [hk_prompt]
+    call    hd_keys
+    mov     dword [hk_lc], C_DIM
+.out:
+    add     rsp, 48
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
 ; тёмная полоса поперёк экрана и росчерк с ромбом (xmm0 — его y)
 hd_band:
     sub     rsp, 56
@@ -2114,6 +2301,9 @@ hd_intro:
     TXT     FT_SUB, 1, 320.0, 157.0, ts_sub, 0xFFD2DCE8
     mov     dword [hk_y], __float32__(186.0)
     lea     rcx, [hk_intro]
+    call    hd_keys
+    mov     dword [hk_y], __float32__(200.0)
+    lea     rcx, [hk_intro2]
     call    hd_keys
     add     rsp, 40
     ret
@@ -2249,7 +2439,7 @@ hd_keys:
     mov     ecx, FT_TXT
     xor     edx, edx
     mov     r8, [rbx + 8]
-    mov     r9d, C_DIM
+    mov     r9d, [hk_lc]
     call    hq_text
     addss   xmm0, [hc_10]
     addss   xmm0, [rsp + 36]
@@ -2317,6 +2507,11 @@ hc_256:     dd 256.0
 hc_320:     dd 320.0
 hc_1040:    dd 1040.0                   ; 17:20
 hc_1920:    dd 1920.0                   ; 08:00 следующего дня
+hc_4:       dd 4.0
+hc_6:       dd 6.0
+hc_34:      dd 34.0
+hc_628:     dd 628.0
+hl_cx:      dd 0.0                      ; середина значка запаса
 hc_1_60:    dd 0.016666668
 hc_1_880:   dd 0.0011363636             ; 1 / (08:00 − 17:20)
 
@@ -2365,6 +2560,8 @@ hw_sx:      dd 0.0
 hw_sy:      dd 0.0
 hw_c:       dd 0
 hk_y:       dd 0.0
+hk_lc:      dd C_DIM                    ; цвет подписей у клавиш
+hl_x:       dd 0.0                      ; запас: левый край слота
 hs_lastk:   dd 0                        ; счёт прошлого кадра и вспышка нового упокоенного
 hs_kt:      dd 0.0
 gl_col:     dd 0
@@ -2404,9 +2601,12 @@ view_hdr:   db 'BM'                     ; размеры — в hud_shot
             dd 0, 0, 2835, 2835, 0, 0
 hk_intro:   dq ts_kwasd, ts_go, ts_kshift, ts_run, ts_klmb, 0, ts_kspace, ts_shovel
             dq ts_kf, ts_flash, ts_km, ts_sound, ts_kf11, ts_screen, 0
+hk_intro2:  dq ts_ke, ts_takei, ts_k14, ts_usei, 0
 hk_end:     dq ts_kr, ts_again, ts_kesc, ts_quit, 0
+hk_prompt:  dq ts_ke, tbuf, 0            ; «E взять …» — подпись собирается в tbuf
+hl_keys:    dq ts_k1, ts_k2, ts_k3, ts_k4
 align 2, db 0
-gc_ext:     dw 0x401, 0x451, 0xB7, 0x2014, 0x2013, 0x2192, 0xB0, 0
+gc_ext:     dw 0x401, 0x451, 0xB7, 0x2014, 0x2013, 0x2192, 0xB0, 0xD7, 0
 fnn_bsb:    dw __utf16__('Bahnschrift SemiBold'), 0
 fnn_bsl:    dw __utf16__('Bahnschrift SemiLight'), 0
 fnn_bl:     dw __utf16__('Bahnschrift Light'), 0
@@ -2446,6 +2646,15 @@ ts_kr:      dw __utf16__('R'), 0
 ts_again:   dw __utf16__('заново'), 0
 ts_kesc:    dw __utf16__('Esc'), 0
 ts_quit:    dw __utf16__('выход'), 0
+ts_ke:      dw __utf16__('E'), 0
+ts_takei:   dw __utf16__('взять, обыскать'), 0
+ts_k14:     dw __utf16__('1–4'), 0
+ts_usei:    dw __utf16__('вещь из запаса'), 0
+ts_k1:      dw __utf16__('1'), 0
+ts_k2:      dw __utf16__('2'), 0
+ts_k3:      dw __utf16__('3'), 0
+ts_k4:      dw __utf16__('4'), 0
+ts_times:   dw 0xD7, 0
 
 section .bss
 alignb 16

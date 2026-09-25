@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~33k lines of hand-written NASM. The game is a single 370 KB executable.
+~38k lines of hand-written NASM. The game is a single 460 KB executable.
 
 **What's inside**
 
@@ -62,6 +62,24 @@ files. The village, sprites, light, weather and sound are all produced by
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
   follow the sprite shapes.
+- **Every izba is furnished differently.** When the roof comes off you see
+  log walls, whitewash over a painted dado, patterned wallpaper or board
+  panelling, and a floor that is bare, red, ochre or grey. There is a bed
+  with a patchwork quilt (wooden or iron), a wardrobe or a glass-front
+  sideboard with dishes, a painted chest and a bench. A carpet hangs over the
+  bed, and there may be an icon with an embroidered towel and a lit lampada, a
+  pendulum clock, photos, a calendar, a mirror or a shelf. On the table there
+  is a tablecloth or oilcloth with a samovar, a geranium pot or a flickering
+  TV, and rag runners lie on the floor. Windows show curtains and the night
+  from the inside. Furniture is drawn as boxes with per-pixel depth and normals,
+  so lamps and the flashlight light it like everything else. The layout
+  comes from a hash of the house's position and always leaves a path from the
+  door.
+- **Loot.** Houses hold batteries, bandages, thermoses of tea and tinned meat.
+  Some lie on tables, beds and floors, and the rest are hidden in chests and
+  wardrobes. Abandoned dark houses have more. E picks up or searches, and
+  1–4 use an item from your stock: batteries refill the flashlight, a bandage
+  heals, tea warms you, and food restores health and stamina.
 - **Wind as a system.** Each night has its own weather script: calm, then
   ground drift, a blizzard and a morning breeze. The gust field is sheltered
   behind houses, fences and trees, and it moves snowfall, drifting snow, chimney
@@ -83,6 +101,8 @@ files. The village, sprites, light, weather and sound are all produced by
 | Shift | run |
 | LMB / Space | swing the shovel |
 | F | flashlight |
+| E | pick up / search a chest or wardrobe |
+| 1 – 4 | use batteries, bandage, tea, food |
 | M | sound on/off |
 | F11 / Alt+Enter | fullscreen |
 | F3 | show hitboxes |
@@ -110,6 +130,8 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | `--hb`, `--lm`, `--wind`, `--soak` | hitboxes, baked lamp light, wind field from above, 3000-frame soak |
 | `--fs`, `--alog` | start fullscreen; log audio buffer underruns to `alog.bin` |
 | `--intro` (with a shot) | draws the title overlay over the shot |
+| `--house N`, `--pick 1\|2` (with `--shot3`) | inside the N-th izba; next to its first item or container, pressing E (and 1–4) just before the shot |
+| `--albedo` (with a shot) | writes the unlit G-buffer colours to `shotN.bmp` |
 | `--view N` (with a shot) | height of `viewN.bmp` (16:9), 1080 by default |
 | `--bench` (with a shot) | runs the scene in a live window for 600 frames and writes per-pass timings to `bench.bin` |
 | `--threads N`, `--noavx` | limit the render thread pool; use only the SSE2 path |
@@ -125,8 +147,8 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~33 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 370 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~38 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 460 КБ.
 
 **Что внутри**
 
@@ -161,6 +183,22 @@ runs `--bench` and prints min / median / p90 for every pass.
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют
   форму спрайтов.
+- **В каждой избе своё убранство.** Когда снимается крыша, внутри видны
+  брёвна, побелка над крашеной панелью, обои с узором или вагонка. Пол
+  некрашеный, суриком, охрой или серый. Там кровать с лоскутным одеялом,
+  деревянная или железная, шкаф или буфет с посудой за стеклом, крашеный
+  сундук и лавка. Над кроватью висит ковёр, а ещё могут быть икона с рушником
+  и горящей лампадой, ходики с маятником, фотокарточки, календарь, зеркало,
+  полка. На столе скатерть или клеёнка, на ней самовар, кринка с геранью или
+  мерцающий телевизор. На полу лежат полосатые половики. Окна изнутри со
+  шторами, за стеклом ночь. Мебель — коробки с попиксельной глубиной и
+  нормалями, поэтому свет ламп и фонарика ложится на неё как на всё остальное.
+  Расстановка берётся из хеша места избы, и от двери всегда остаётся проход.
+- **Лут.** В избах лежат батарейки, бинты, термосы с чаем и тушёнка: одно на
+  столах, кроватях и полу, другое спрятано в сундуках и шкафах. В тёмных
+  брошенных избах добра больше. E — взять или обыскать, 1–4 — пустить в ход
+  из запаса: батарейки заряжают фонарь, бинт лечит, чай греет, еда
+  возвращает здоровье и силы.
 - **Ветер как система.** У каждой ночи свой сценарий погоды: тишина, потом
   позёмка, метель и утренний ветерок. Поле порывов с затишьем за избами,
   заборами и деревьями двигает снег, позёмку, дым, деревья и провода. Зомби
@@ -173,8 +211,9 @@ runs `--bench` and prints min / median / p90 for every pass.
   печки и телевизор за стеной. Звуки несёт ветром и глушат стены.
 
 **Управление:** WASD — идти, Shift — бежать, ЛКМ/Пробел — лопата, F — фонарь,
-M — звук, F11 или Alt+Enter — полный экран, F3 — хитбоксы; после конца ночи
-R — заново, Esc — выход.
+E — взять или обыскать, 1–4 — батарейки, бинт, чай, еда из запаса, M — звук,
+F11 или Alt+Enter — полный экран, F3 — хитбоксы; после конца ночи R — заново,
+Esc — выход.
 
 **Сборка:** нужны NASM 2.15+ и mingw-w64 binutils (`x86_64-w64-mingw32-ld`) —
 в `PATH` или в WSL. Команда `sh build.sh` собирает `build/stuzha.exe`.

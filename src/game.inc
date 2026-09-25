@@ -92,6 +92,13 @@ new_game:
     jnz     .f
     mov     dword [pl_warm], __float32__(100.0)
     mov     dword [pl_wsm], 0
+    xor     eax, eax                    ; запас вещей и сообщение — с нуля
+    mov     [inv], eax
+    mov     [inv + 4], eax
+    mov     [inv + 8], eax
+    mov     [inv + 12], eax
+    mov     [lm_t], eax
+    mov     [lp_kind], eax
     call    audio_newgame               ; голоса зомби, будки, собаки — заново
     add     rsp, 32
     pop     rdi
@@ -676,6 +683,7 @@ update_player:
     movss   [pl_sta], xmm0
 .nregen:
     call    warm_update
+    call    loot_update                 ; вещи рядом: E — взять, обыскать; 1..4 — в ход
     ; взгляд: курсор на фигуре зомби — прямо на его ноги, иначе — на курсор
     ; (от груди: точка на уровне груди зомби даёт направление на его ноги)
     call    aim_pick

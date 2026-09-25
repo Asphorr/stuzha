@@ -44,6 +44,10 @@ T_LINE      equ 18
 T_KENNEL    equ 19
 T_BIRDH     equ 20
 T_WELL      equ 21
+T_BED       equ 22                  ; мебель избы (interior.inc): кровать — два тайла
+T_CUPB      equ 23                  ; шкаф или буфет
+T_CHEST     equ 24                  ; сундук
+T_LAVKA     equ 25                  ; лавка у стены
 NTILE       equ 32
 
 ; виды отрисовки
@@ -66,6 +70,10 @@ D_LINE      equ 15
 D_KENNEL    equ 16
 D_BIRDH     equ 17
 D_WELL      equ 18
+D_BED       equ 19                  ; мебель — коробками (furn.inc)
+D_CUPB      equ 20
+D_CHEST     equ 21
+D_LAVKA     equ 22
 
 ; таблица спрайтов тайлов (индекс = вид - D_SPRUCE)
 SPT_PTR     equ 0
@@ -134,7 +142,7 @@ N_SB        equ 51                  ; крупные (ель, берёза, ко
 
 ; избы и крыши
 MAXH        equ 48
-HS_SZ       equ 64
+HS_SZ       equ 128
 HS_X0       equ 0                   ; тайлы
 HS_Y0       equ 4
 HS_W        equ 8
@@ -151,6 +159,35 @@ HS_OCC      equ 48                  ; прошлый кадр: крыша зак
 HS_FADE     equ 52                  ; f32: 1 — крыша есть, 0 — снята (игрок внутри)
 HS_ZT       equ 56                  ; верх трубы, px
 HS_ZR       equ 60                  ; снег на коньке, px
+; убранство (interior.inc) — от хеша места, как облик крыши
+HS_IVIS     equ 64                  ; кадр: нутро видно (крыша снята, тает или прорежена)
+HS_WALL     equ 68                  ; стены изнутри: 0 брёвна, 1 побелка с панелью, 2 обои, 3 вагонка
+HS_WCOL     equ 72                  ; цвет панели / обоев / вагонки, 0xRRGGBB
+HS_WMOT     equ 76                  ; узор обоев
+HS_CURT     equ 80                  ; шторы
+HS_CARP     equ 84                  ; ковёр на стене: палитра 0..3
+HS_CLOTH    equ 88                  ; стол: 0 голый, 1 белая скатерть, 2 клеёнка в клетку, 3 зелёная
+HS_BLNK     equ 92                  ; одеяло: палитра 0..3
+HS_WOOD     equ 96                  ; дерево мебели, 0xRRGGBB
+HS_ONTAB    equ 100                 ; на столе (без телевизора): 0 ничего, 1 самовар, 2 кринка с геранью
+HS_CHPAL    equ 104                 ; краска сундука, 0xRRGGBB
+; мебель в hflags (биты 0-1 — свет и телевизор всего дома)
+FM_ROT      equ 0x0C                ; к какой стене спиной: 0 −y, 1 −x, 2 +y, 3 +x (<< 2)
+FM_HEAD     equ 0x10                ; кровать: изголовье на этом тайле
+FM_ALT      equ 0x20                ; кровать: пара — к +u; шкаф: буфет
+FM_OPEN     equ 0x40                ; сундук, шкаф: обысканы
+FM_IRON     equ 0x80                ; кровать железная
+; лут (interior.inc)
+LO_SZ       equ 16
+LO_X        equ 0                   ; f32, тайлы
+LO_Y        equ 4
+LO_Z        equ 8                   ; байт: над полом, px
+LO_T        equ 9                   ; вид: 1 батарейки, 2 бинт, 3 термос, 4 тушёнка
+LO_S        equ 10                  ; 0 нет, 1 лежит на виду, 2 в сундуке или шкафу
+LO_H        equ 11                  ; дом + 1
+LO_C        equ 12                  ; тайник: y·128 + x
+MAXLOOT     equ 160
+NLT         equ 4
 HF_LIT      equ 1
 HF_TV       equ 2
 HF_SLIDE    equ 4                   ; снег съехал с края ската

@@ -549,6 +549,13 @@ gen_map:
     lea     rdi, [rmap]
     mov     ecx, MAPW*MAPW
     rep     stosb
+    lea     rdi, [wdeco]                ; нутро изб (interior.inc)
+    mov     ecx, MAPW*MAPW
+    rep     stosb
+    lea     rdi, [fmap]
+    mov     ecx, MAPW*MAPW*2
+    rep     stosb
+    mov     dword [nloot], 0
     mov     dword [nhouses], 0
     mov     dword [nlights], 0
     mov     dword [nsmk], 0
@@ -1057,6 +1064,7 @@ make_lot:
     mov     ecx, ebx
     mov     edx, esi
     call    add_house
+    call    furnish                     ; мебель, отделка, половики, лут (interior.inc)
     ; свет в избе
     cmp     dword [H_lit], 0
     je      .pile

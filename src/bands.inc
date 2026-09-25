@@ -36,12 +36,19 @@ BAND_NAMES draw_objects, draw_tile, draw_block, shade_top, shade_side, draw_img,
     ri_U0, ri_U1, ri_V0, ri_V1, ri_Vm, ri_hs, ri_P, ri_uc, ri_vc, ri_zt, ri_zr, \
     ri_ze, ri_fl, ri_seed, ri_mat, ri_gab, ri_barge, rn_f, rn_b, rn_g, rn_a, \
     rt_a, rt_b, rt_c, rt_d, rt_e, rt_f, la_u0, la_v0, la_z0, la_u1, la_v1, la_z1, \
-    la_col, ra_g, ra_s, ra_u, ra_t
+    la_col, ra_g, ra_s, ra_u, ra_t, \
+    draw_box, fu_scl, fbox, fo_wrap, furn_tile, fu_bed, fu_cupb, fu_chest, fu_lavka, \
+    table_top, fu_tv, fu_samo, fu_pot, wall_inner, draw_loot, \
+    bk_wface, bk_inner, bk_hid, bk_deco, bk_cloth, \
+    bx_x0, bx_y0, bx_x1, bx_y1, bx_z0, bx_h, bx_zt, bx_fc, bx_sh, bx_px, bx_py, bx_u, \
+    bx_face, bx_gp, fo_hp, fo_sh, fo_fl, fo_d, fo_box, fo_z0, fo_h, fo_wood, fo_col, \
+    fo_pal, fo_wx, fo_wy, fo_scr, fo_flen, fo_slen
 
 %assign BI 0
 %rep NBANDS
 section .text
 %include "objects.inc"
+%include "furn.inc"
 %include "roofdraw.inc"
 
 ; ecx = первая строка полосы, edx = за последней: объекты, потом крыши над ними
@@ -87,6 +94,42 @@ pix_ly:     dd 0
 sh_n:       dd 0                        ; нормаль пикселя грани (shade_side)
 di_t1:      dd 0
 di_t2:      dd 0
+bk_wface:   dd 1                        ; окно — на этой грани (0 +y, 1 +x)
+bk_inner:   dd 0                        ; грани, что смотрят внутрь избы с видным нутром
+bk_hid:     dd 0                        ; изба тайла + 1 (нутро видно)
+bk_deco:    dd 0                        ; убранство стены (wdeco)
+bk_cloth:   dd 0                        ; скатерть стола
+; коробки мебели (furn.inc)
+bx_x0:      dd 0
+bx_y0:      dd 0
+bx_x1:      dd 0
+bx_y1:      dd 0
+bx_z0:      dd 0
+bx_h:       dd 0
+bx_zt:      dd 0
+bx_fc:      dd 0
+bx_px:      dd 0
+bx_py:      dd 0
+bx_u:       dd 0
+bx_face:    dd 0
+bx_gp:      dd 0
+fo_fl:      dd 0
+fo_d:       dd 0
+fo_box:     dd 0
+fo_z0:      dd 0
+fo_h:       dd 0
+fo_wood:    dd 0
+fo_col:     dd 0
+fo_pal:     dd 0
+fo_wx:      dd 0
+fo_wy:      dd 0
+fo_scr:     dd 0
+fo_flen:    dd 0
+fo_slen:    dd 0
+align 8, db 0
+bx_sh:      dq 0
+fo_hp:      dq 0
+fo_sh:      dq 0
 ; фигуры и картинки
 cm_gpos:    dd 0
 cm_dlim:    dd 0x7FFFFFFF               ; фигура не рисуется поверх того, что ближе к глазу

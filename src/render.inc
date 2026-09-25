@@ -21,6 +21,7 @@ render:
     lea     rcx, [prof_last]
     call    [QueryPerformanceCounter]
     call    cam_snap
+    call    interior_frame              ; у каких изб видно нутро (interior.inc)
     call    build_ntab                  ; луна и небо по нормалям
     call    moon_grid                   ; облака
     ; тени луны и маска позёмки нужны только свету (и частицам): фоном, на своём
@@ -33,6 +34,7 @@ render:
     call    dl_frame                    ; огни кадра по плиткам экрана (lights.inc)
     PROF    1
     call    floor_pass
+    call    ifloor_pass                 ; крашеные доски и половики в избах без крыши
     PROF    2
     ; объекты и крыши (поверх, с тестом глубины) — полосами экрана на всех ядрах
     lea     rcx, [obj_job]

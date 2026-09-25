@@ -58,6 +58,35 @@ draw_objects:
     inc     r12d
     cmp     r12d, MAXE
     jb      .e
+    ; лут на виду — в избах с видным нутром (номер | 0x10000)
+    lea     rbx, [loot]
+    xor     r12d, r12d
+.lo:
+    cmp     r12d, [nloot]
+    jae     .built
+    cmp     r15d, 300
+    jae     .built
+    cmp     byte [rbx + LO_S], 1
+    jne     .lon
+    movzx   eax, byte [rbx + LO_H]
+    dec     eax
+    imul    eax, eax, HS_SZ
+    lea     rdx, [houses]
+    cmp     dword [rdx + rax + HS_IVIS], 0
+    je      .lon
+    movss   xmm0, [rbx + LO_X]
+    addss   xmm0, [rbx + LO_Y]
+    mulss   xmm0, [f_256]
+    cvtss2si eax, xmm0
+    mov     [rdi], eax
+    lea     eax, [r12d + 0x10000]
+    mov     [rdi+4], eax
+    add     rdi, 8
+    inc     r15d
+.lon:
+    add     rbx, LO_SZ
+    inc     r12d
+    jmp     .lo
 .built:
     ; сортировка вставками
     lea     rax, [dlist]
@@ -226,6 +255,9 @@ draw_tile:
     mov     dword [bk_cut], 0
     mov     dword [bk_faces], 3
     mov     dword [bk_notop], 0
+    mov     dword [bk_inner], 0
+    mov     dword [bk_hid], 0
+    mov     dword [bk_cloth], 0
     mov     eax, [bk_kind]
     cmp     eax, D_WINL
     jbe     .wall
@@ -239,9 +271,15 @@ draw_tile:
     je      .table
     cmp     eax, D_PILE
     je      .pile
+    cmp     eax, D_BED
+    jae     .furn
     jmp     .sprite
+.furn:
+    call    furn_tile
+    jmp     .out
 .wall:
     mov     dword [bk_H], 36
+    call    .winner
     call    .occl
     test    eax, eax
     jz      .blk
@@ -258,7 +296,18 @@ draw_tile:
     jmp     .blk
 .table:
     mov     dword [bk_H], 8
-    jmp     .blk
+    call    .hvis
+    test    eax, eax
+    jz      .blk
+    mov     eax, [bk_hid]
+    dec     eax
+    imul    eax, eax, HS_SZ
+    lea     rdx, [houses]
+    mov     eax, [rdx + rax + HS_CLOTH]
+    mov     [bk_cloth], eax
+    call    draw_block
+    call    table_top                   ; телевизор, самовар, кринка
+    jmp     .out
 .pile:
     mov     dword [bk_H], 12
     jmp     .blk
@@ -501,6 +550,78 @@ draw_tile:
     pop     rsi
     pop     rbx
     ret
+; изба тайла, если её нутро видно (крыша снята, тает, прорежена) -> bk_hid = дом + 1,
+; eax = 1; иначе eax = 0
+.hvis:
+    mov     eax, [bk_ty]
+    shl     eax, 7
+    add     eax, [bk_tx]
+    lea     rdx, [rmap]
+    movzx   ecx, byte [rdx + rax]
+    test    ecx, ecx
+    jz      .hv0
+    lea     edx, [ecx - 1]
+    imul    edx, edx, HS_SZ
+    lea     r8, [houses]
+    cmp     dword [r8 + rdx + HS_IVIS], 0
+    je      .hv0
+    mov     [bk_hid], ecx
+    mov     eax, 1
+    ret
+.hv0:
+    xor     eax, eax
+    ret
+; сруб: на какой грани окно — поперёк стены (стена вдоль x, сосед по x — сруб: на +y,
+; иначе на +x; вторая грань — торец, там брёвна). У избы с видным нутром — какие грани
+; смотрят в комнату (bk_inner) и что на стене (bk_deco)
+.winner:
+    mov     dword [bk_wface], 1
+    cmp     dword [bk_kind], D_WALL
+    je      .wi1
+    mov     ecx, [bk_tx]
+    inc     ecx
+    mov     edx, [bk_ty]
+    call    get_tile
+    cmp     eax, T_WALL
+    je      .wi0
+    mov     ecx, [bk_tx]
+    dec     ecx
+    call    get_tile
+    cmp     eax, T_WALL
+    jne     .wi1
+.wi0:
+    mov     dword [bk_wface], 0
+.wi1:
+    call    .hvis
+    test    eax, eax
+    jz      .wi9
+    mov     eax, [bk_ty]
+    shl     eax, 7
+    add     eax, [bk_tx]
+    lea     rdx, [wdeco]
+    movzx   ecx, byte [rdx + rax]
+    mov     [bk_deco], ecx
+    lea     rdx, [tmap]
+    lea     r8, [tprop]
+    movzx   ecx, byte [rdx + rax + MAPW]
+    test    byte [r8 + rcx], 4
+    jz      .wi2
+    or      dword [bk_inner], 1
+.wi2:
+    movzx   ecx, byte [rdx + rax + 1]
+    test    byte [r8 + rcx], 4
+    jz      .wi3
+    or      dword [bk_inner], 2
+    ret
+.wi3:
+    ; столбец p = 0 (правая грань) сосед по x не закрывает: если за ним по диагонали
+    ; комната — это стык двух внутренних граней, красим как левую (u = 15)
+    movzx   ecx, byte [rdx + rax + MAPW + 1]
+    test    byte [r8 + rcx], 4
+    jz      .wi9
+    or      dword [bk_inner], 5         ; левая грань угла закрыта соседом — пусть тоже
+.wi9:
+    ret
 ; eax = 1, если блок перед игроком и рядом по экрану
 .occl:
     xor     eax, eax
@@ -620,6 +741,11 @@ draw_block:
     js      .fl
     mov     r15d, 1
     mov     ebp, r12d                   ; u на правой грани
+    jnz     .fl
+    test    dword [bk_inner], 4         ; стык внутренних граней — продолжение левой
+    jz      .fl
+    xor     r15d, r15d
+    mov     ebp, 15
 .fl:
     mov     eax, 1
     mov     ecx, r15d
@@ -678,11 +804,15 @@ draw_block:
     ; путь: то же, что shade_side.logs, без вызова и развилок по виду, оттенок — из
     ; таблицы; сугроб внизу колонки дорисует общий цикл
     mov     eax, [bk_kind]
+    bt      dword [bk_inner], r15d      ; грань в комнату избы без крыши — отделка
+    jc      .sl
     cmp     eax, D_WALL
     je      .flog
     cmp     eax, D_WINL
     ja      .sl
     cmp     dword [bk_cut], 0
+    jne     .flog
+    cmp     r15d, [bk_wface]            ; окно — только на своей грани, торец — брёвна
     jne     .flog
     lea     eax, [rbp - 2]
     sub     eax, r15d                   ; окно и подоконник — в u − 2 − грань = 0..10
@@ -849,11 +979,59 @@ shade_top:
     mov     eax, 0x01DDE0E6
     ret
 .table:
+    mov     eax, [bk_cloth]
+    test    eax, eax
+    jnz     .cloth
     and     edx, 63
     mov     eax, 0x018C5C36
     cmp     edx, 6
     jae     .r
     mov     eax, 0x015A3C24
+    ret
+.cloth:
+    cmp     eax, 2
+    je      .coil
+    ja      .cgrn
+    ; белая скатерть: две красные полосы вдоль края
+    mov     eax, ecx
+    mov     r8d, 255
+    sub     r8d, ecx
+    cmp     r8d, eax
+    cmovl   eax, r8d
+    cmp     edx, eax
+    cmovl   eax, edx
+    mov     r8d, 255
+    sub     r8d, edx
+    cmp     r8d, eax
+    cmovl   eax, r8d                    ; до края
+    lea     r8d, [eax - 20]
+    cmp     r8d, 8
+    jb      .cred
+    lea     r8d, [eax - 36]
+    cmp     r8d, 6
+    jb      .cred
+    mov     eax, 0x01E8E4DA
+    ret
+.cred:
+    mov     eax, 0x01B83028
+    ret
+.coil:
+    ; клеёнка в клетку по 1/8 тайла
+    shr     ecx, 5
+    shr     edx, 5
+    add     ecx, edx
+    test    ecx, 1
+    mov     eax, 0x01E4E8EC
+    jz      .r
+    mov     eax, 0x013A6AB0
+    ret
+.cgrn:
+    ; сукно: ворс шахматкой чуть темнее
+    xor     ecx, edx
+    test    ecx, 16
+    mov     eax, 0x013E6040
+    jz      .r
+    mov     eax, 0x01365838
     ret
 
 ; ecx = u (вдоль грани), edx = h (высота), r8d = грань (0 лев, 1 прав) -> eax (0 = прозрачно)
@@ -894,9 +1072,13 @@ shade_side:
     je      .table
     cmp     eax, D_PILE
     je      .pile
+    bt      dword [bk_inner], edi
+    jc      .inner
     cmp     eax, D_WALL
     je      .logs
     cmp     dword [bk_cut], 0
+    jne     .logs
+    cmp     edi, [bk_wface]
     jne     .logs
     ; ----- окно с наличником
     mov     eax, ebx
@@ -1042,6 +1224,12 @@ shade_side:
 .blue:
     mov     eax, 0x013C6AC0
     jmp     .retface
+.inner:
+    ; грань в комнату избы без крыши: отделка, окно изнутри, убранство (furn.inc);
+    ; 0 — брёвна, как снаружи
+    call    wall_inner
+    test    eax, eax
+    jnz     .ret
     ; ----- брёвна (снежная кромка и сосульки теперь у свеса крыши)
 .logs:
 .l1:
@@ -1210,8 +1398,11 @@ shade_side:
     jmp     .retface
     ; ----- стол
 .table:
+    cmp     dword [bk_cloth], 0
+    jne     .tcl
     cmp     esi, 6
     jae     .tapron
+.tlegs:
     cmp     ebx, 1
     jb      .transp
     cmp     ebx, 2
@@ -1225,6 +1416,48 @@ shade_side:
     jmp     .retface
 .tapron:
     mov     eax, 0x01583A22
+    jmp     .retface
+.tcl:
+    ; скатерть свисает на 5 px, под ней — ножки
+    cmp     esi, 3
+    jb      .tlegs
+    mov     eax, [bk_cloth]
+    cmp     eax, 2
+    je      .toil
+    ja      .tgrn
+    ; белая: внизу кружево через пиксель, красная полоса
+    cmp     esi, 3
+    jne     .tw1
+    test    ebx, 1
+    jz      .transp
+    mov     eax, 0x01D8D4CC
+    jmp     .retface
+.tw1:
+    mov     eax, 0x01E8E4DA
+    cmp     esi, 5
+    jne     .retface
+    mov     eax, 0x01B83028
+    jmp     .retface
+.toil:
+    ; клеёнка в клетку по 2 px
+    mov     eax, ebx
+    shr     eax, 1
+    mov     ecx, esi
+    shr     ecx, 1
+    add     eax, ecx
+    test    eax, 1
+    mov     eax, 0x01E4E8EC
+    jz      .retface
+    mov     eax, 0x013A6AB0
+    jmp     .retface
+.tgrn:
+    ; зелёная суконная, с бахромой
+    cmp     esi, 3
+    jne     .tg1
+    test    ebx, 1
+    jz      .transp
+.tg1:
+    mov     eax, 0x013E6040
     jmp     .retface
     ; ----- поленница: торцы брёвен
 .pile:
@@ -1604,6 +1837,12 @@ draw_entity:
     mov     r15d, 1
     jmp     .have
 .z:
+    cmp     ecx, 0x10000                ; лут на виду (furn.inc)
+    jb      .z1
+    sub     ecx, 0x10000
+    call    draw_loot
+    jmp     .out
+.z1:
     imul    eax, ecx, ESZ
     lea     rbx, [ents]
     add     rbx, rax

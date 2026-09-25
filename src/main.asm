@@ -45,6 +45,7 @@ start:
     call    gen_frost
     call    gen_sprites
     call    gen_props
+    call    gen_loot
     call    init_gdi
     call    new_game
     cmp     dword [dbg_sndt], 0
@@ -326,6 +327,19 @@ run_shot:
 .atk:
     mov     byte [k_lmb], 1
 .nokeys:
+    ; --pick: E за 8 кадров до снимка, 1..4 — за 4
+    mov     byte [k_e_edge], 0
+    mov     dword [k_n_edge], 0
+    cmp     dword [dbg_pick], 0
+    je      .nopk
+    cmp     dword [shot_frames], 8
+    jne     .pk4
+    mov     byte [k_e_edge], 1
+.pk4:
+    cmp     dword [shot_frames], 4
+    jne     .nopk
+    mov     dword [k_n_edge], 0x01010101
+.nopk:
     mov     dword [dt], 0x3D088889      ; 1/30
     call    update
     call    render                      ; как в живом цикле: зомби смотрят в сетку видимости
@@ -415,6 +429,18 @@ run_shot:
     je      .svb
     call    dump_wind
 .svb:
+    cmp     dword [dbg_alb], 0
+    je      .sva
+    mov     rdi, [fbbits]               ; --albedo: цвета G-буфера как есть
+    lea     rsi, [albedo]
+    mov     ecx, SCR_W*SCR_H
+.alb:
+    lodsd
+    and     eax, 0x00FFFFFF
+    stosd
+    dec     ecx
+    jnz     .alb
+.sva:
     call    save_bmp                    ; кадр без HUD — shotN.bmp
     call    hud_shot                    ; он же с HUD в 1920x1080 — viewN.bmp
     cmp     byte [aud_wav], 0
@@ -530,15 +556,28 @@ bench_run:
     call    [CloseHandle]
     jmp     quit
 
-; игрок — рядом с первой горящей печью
+; игрок — рядом с первой горящей печью (--house N: с печью N-й избы, горит она или нет)
 shot_put_inside:
     push    rbx
     sub     rsp, 32
     lea     rbx, [tmap]
     xor     eax, eax
+    mov     edx, [dbg_house]
 .find:
+    test    edx, edx
+    jnz     .any
     cmp     byte [rbx + rax], T_STOVEL
     je      .got
+    jmp     .fn
+.any:
+    cmp     byte [rbx + rax], T_STOVE
+    je      .cnt
+    cmp     byte [rbx + rax], T_STOVEL
+    jne     .fn
+.cnt:
+    dec     edx
+    jz      .got
+.fn:
     inc     eax
     cmp     eax, MAPW*MAPW
     jb      .find
@@ -569,8 +608,107 @@ shot_put_inside:
     addss   xmm0, [f_0_5]
     movss   [pl + E_Y], xmm0
     movss   [cam_yf], xmm0
+    cmp     dword [dbg_pick], 0
+    je      .out
+    call    shot_put_pick
 .out:
     add     rsp, 32
+    pop     rbx
+    ret
+
+; --pick 1: игрок на пустом полу у первой вещи на виду своей избы; --pick 2 — у сундука
+; или шкафа (на соседнем тайле)
+shot_put_pick:
+    push    rbx
+    push    rsi
+    push    rdi
+    sub     rsp, 32
+    cvttss2si ecx, [pl + E_X]
+    cvttss2si edx, [pl + E_Y]
+    shl     edx, 7
+    add     edx, ecx
+    lea     rax, [rmap]
+    movzx   edi, byte [rax + rdx]       ; изба + 1
+    mov     esi, -1                     ; тайл цели
+    cmp     dword [dbg_pick], 1
+    jne     .cont
+    lea     rbx, [loot]
+    xor     ecx, ecx
+.l:
+    cmp     ecx, [nloot]
+    jae     .go
+    cmp     byte [rbx + LO_S], 1
+    jne     .ln
+    movzx   eax, byte [rbx + LO_H]
+    cmp     eax, edi
+    jne     .ln
+    cvttss2si eax, [rbx + LO_X]
+    cvttss2si edx, [rbx + LO_Y]
+    shl     edx, 7
+    add     edx, eax
+    mov     esi, edx
+    jmp     .go
+.ln:
+    add     rbx, LO_SZ
+    inc     ecx
+    jmp     .l
+.cont:
+    lea     rbx, [tmap]
+    xor     ecx, ecx
+.c:
+    cmp     ecx, MAPW*MAPW
+    jae     .go
+    lea     rax, [rmap]
+    movzx   eax, byte [rax + rcx]
+    cmp     eax, edi
+    jne     .cn
+    cmp     byte [rbx + rcx], T_CHEST
+    je      .cg
+    cmp     byte [rbx + rcx], T_CUPB
+    jne     .cn
+.cg:
+    mov     esi, ecx
+    jmp     .go
+.cn:
+    inc     ecx
+    jmp     .c
+.go:
+    test    esi, esi
+    js      .out
+    ; сама клетка, если пол, иначе пустой сосед
+    lea     rbx, [tmap]
+    cmp     byte [rbx + rsi], T_WOOD
+    je      .put
+    lea     rdx, [nb4]
+    xor     ecx, ecx
+.nb:
+    movsx   eax, word [rdx + rcx*2]
+    add     eax, esi
+    cmp     byte [rbx + rax], T_WOOD
+    je      .nbok
+    inc     ecx
+    cmp     ecx, 4
+    jb      .nb
+    jmp     .out
+.nbok:
+    mov     esi, eax
+.put:
+    mov     eax, esi
+    and     eax, MAPW-1
+    cvtsi2ss xmm0, eax
+    addss   xmm0, [f_0_5]
+    movss   [pl + E_X], xmm0
+    movss   [cam_xf], xmm0
+    mov     eax, esi
+    shr     eax, 7
+    cvtsi2ss xmm0, eax
+    addss   xmm0, [f_0_5]
+    movss   [pl + E_Y], xmm0
+    movss   [cam_yf], xmm0
+.out:
+    add     rsp, 32
+    pop     rdi
+    pop     rsi
     pop     rbx
     ret
 
@@ -791,6 +929,13 @@ parse_cmdline:
     mov     dword [dbg_sndt], 1
     jmp     .next
 .nsn:
+    cmp     word [rax+4], 'a'           ; --albedo: в shotN.bmp — альбедо без света (отладка)
+    jne     .nab
+    cmp     word [rax+8], 'b'
+    jne     .nab
+    mov     dword [dbg_alb], 1
+    jmp     .next
+.nab:
     cmp     word [rax+4], 'a'           ; --alog: при выходе alog.bin (блоки, провалы)
     jne     .nal
     cmp     word [rax+6], 'l'
@@ -838,6 +983,34 @@ parse_cmdline:
     mov     [pl_want], ecx
     jmp     .next
 .nth:
+    cmp     word [rax+4], 'h'           ; --house N: снимок 3 — в N-й избе
+    jne     .nhs
+    cmp     word [rax+6], 'o'
+    jne     .nhs
+    lea     rdx, [rax+16]               ; за "--house "
+    xor     ecx, ecx
+.hsd:
+    movzx   r8d, word [rdx]
+    sub     r8d, '0'
+    cmp     r8d, 9
+    ja      .hse
+    imul    ecx, ecx, 10
+    add     ecx, r8d
+    add     rdx, 2
+    jmp     .hsd
+.hse:
+    mov     [dbg_house], ecx
+    jmp     .next
+.nhs:
+    cmp     word [rax+4], 'p'           ; --pick 1|2: снимок 3 — у вещи / у тайника, E под конец
+    jne     .npk
+    movzx   ecx, word [rax+14]          ; за "--pick "
+    sub     ecx, '0'
+    cmp     ecx, 2
+    ja      .next
+    mov     [dbg_pick], ecx
+    jmp     .next
+.npk:
     cmp     word [rax+4], 'v'           ; --view N: снимок с HUD высотой N (16:9), иначе 1080
     jne     .nvw
     cmp     word [rax+6], 'i'
@@ -1265,10 +1438,29 @@ read_input:
     jmp     .edges
 .nofocus:
     xor     eax, eax
-    mov     [keys], rax
-    mov     [keys+8], ax
-    mov     [keys+10], al
+    mov     [keys], rax                 ; k_w .. k_n+3 — 16 байт
+    mov     [keys+8], rax
 .edges:
+    mov     al, [k_e]
+    mov     cl, [k_e_prev]
+    mov     [k_e_prev], al
+    not     cl
+    and     al, cl
+    mov     [k_e_edge], al
+    xor     edx, edx
+.en:
+    lea     r8, [k_n]
+    mov     al, [r8 + rdx]
+    lea     r8, [k_n_prev]
+    mov     cl, [r8 + rdx]
+    mov     [r8 + rdx], al
+    not     cl
+    and     al, cl
+    lea     r8, [k_n_edge]
+    mov     [r8 + rdx], al
+    inc     edx
+    cmp     edx, 4
+    jb      .en
     mov     al, [k_m]
     mov     cl, [k_m_prev]
     mov     [k_m_prev], al
@@ -1447,6 +1639,7 @@ wput_clock:
 
 %include "world.inc"
 %include "props.inc"
+%include "interior.inc"
 %include "game.inc"
 %include "sky.inc"
 %include "wind.inc"
