@@ -77,7 +77,7 @@ J_ELR       equ 17
 J_HAL       equ 18
 J_HAR       equ 19
 J_X0        equ 20                  ; дальше — по одежде и в руках
-NJ          equ 36
+NJ          equ 40
 ; типы
 FZ_PLAYER   equ 6
 
@@ -347,24 +347,31 @@ fz_skel:
     call    vg_cs
     movss   [fz_cph], xmm0
     movss   [fz_sph], xmm1
-    ; бёдра: tL = A·sin φ, tR = −A·sin φ; колени гнутся, пока нога идёт вперёд
+    ; бёдра: tL = A·sin φ, tR = −A·sin φ; колени гнутся, пока нога идёт вперёд. На бегу
+    ; (fz_run 0..1) пятка забрасывается выше (×1.1 -> ×2.4), опорное колено пружинит
     movss   xmm0, [fz_A]
     mulss   xmm0, [fz_sph]
     movss   [fz_tL], xmm0
     xorps   xmm0, [f_signmask]
     movss   [fz_tR], xmm0
+    movss   xmm2, [fz_run]
+    mulss   xmm2, [vk_1_3]
+    addss   xmm2, [vk_1_1]
     movss   xmm1, [fz_A]
-    mulss   xmm1, [vk_1_1]
+    mulss   xmm1, xmm2
+    movss   xmm2, [fz_run]
+    mulss   xmm2, [vk_0_28f]
+    addss   xmm2, [vk_0_12]             ; колено опорной
     movss   xmm0, [fz_cph]
     maxss   xmm0, [f_0]
     mulss   xmm0, xmm1
-    addss   xmm0, [vk_0_12]
+    addss   xmm0, xmm2
     movss   [fz_kL], xmm0
     movss   xmm0, [fz_cph]
     xorps   xmm0, [f_signmask]
     maxss   xmm0, [f_0]
     mulss   xmm0, xmm1
-    addss   xmm0, [vk_0_12]
+    addss   xmm0, xmm2
     movss   [fz_kR], xmm0
     ; хромая нога: шаг вдвое короче, колено не гнётся
     mov     eax, [fz_limp]
@@ -392,6 +399,15 @@ fz_skel:
     call    fz_legh2
     maxss   xmm0, [fz_hL]
     addss   xmm0, [vk_1_1]
+    ; бег: полёт — таз выше опорной ноги, пока обе ноги врозь (15.3 + 1.4·|sin φ|)
+    movss   xmm1, [fz_sph]
+    andps   xmm1, [f_absmask]
+    mulss   xmm1, [vk_1_4]
+    addss   xmm1, [vk_15_3f]
+    subss   xmm1, xmm0
+    maxss   xmm1, [f_0]
+    mulss   xmm1, [fz_run]
+    addss   xmm0, xmm1
     movaps  xmm2, xmm0
     xorps   xmm0, xmm0
     movss   xmm1, [fz_lat]
@@ -693,19 +709,11 @@ fz_extras:
     mov     ecx, J_X0 + 10
     mov     edx, J_SHR
     call    fj_off
-    ; в руках у игрока: лопата — продолжением правого предплечья, фонарик — левого
+    ; в руках у игрока: лопата — черенок в правом кулаке (fz_sth, fz_shg), штык
+    ; плоский, чуть загнут; фонарик — продолжением левого предплечья
     cmp     dword [fz_type], FZ_PLAYER
     jne     .out
-    movss   xmm0, [vk_9]
-    mov     ecx, J_X0 + 11
-    mov     edx, J_HAR
-    mov     r8d, J_ELR
-    call    fj_ext
-    movss   xmm0, [vk_2_4]
-    mov     ecx, J_X0 + 12
-    mov     edx, J_X0 + 11
-    mov     r8d, J_HAR
-    call    fj_ext
+    call    fz_shovel
     movss   xmm0, [vk_2_2]
     mov     ecx, J_X0 + 13
     mov     edx, J_HAL
@@ -718,6 +726,129 @@ fz_extras:
     call    fj_ext
 .out:
     add     rsp, 40
+    ret
+
+; лопата от правого кулака (локально): J_X0+11 — верх черенка, +12 — низ у штыка;
+; штык плоский (две капсулы рядом): +15, +16 — у черенка, +17, +18 — край, загнут вниз
+fz_shovel:
+    push    rbx
+    sub     rsp, 32
+    lea     rbx, [fj]
+    cmp     dword [fz_shm], 0
+    je      .th
+    ; по предплечью: кулак − локоть
+    movss   xmm0, [rbx + J_HAR*16]
+    subss   xmm0, [rbx + J_ELR*16]
+    movss   xmm1, [rbx + J_HAR*16 + 4]
+    subss   xmm1, [rbx + J_ELR*16 + 4]
+    movss   xmm2, [rbx + J_HAR*16 + 8]
+    subss   xmm2, [rbx + J_ELR*16 + 8]
+    jmp     .nd
+.th:
+    movss   xmm0, [fz_sth]
+    call    vg_cs                       ; xmm0 = cos θ — вперёд, xmm1 = sin θ
+    movaps  xmm2, xmm1
+    xorps   xmm2, [f_signmask]          ; вниз
+    movss   xmm1, [fz_shs]
+.nd:
+    call    fz_n3
+    movss   [fz_d], xmm0
+    movss   [fz_d + 4], xmm1
+    movss   [fz_d + 8], xmm2
+    subss   xmm2, [vk_0_35]             ; штык загнут вниз
+    call    fz_n3
+    mulss   xmm0, [vk_3_4f]
+    mulss   xmm1, [vk_3_4f]
+    mulss   xmm2, [vk_3_4f]
+    movss   [fz_db], xmm0
+    movss   [fz_db + 4], xmm1
+    movss   [fz_db + 8], xmm2
+    ; вбок: (d.s, −d.f, 0), 0.75 — капсулы штыка внахлёст, сплошной лист
+    movss   xmm0, [fz_d + 4]
+    movss   xmm1, [fz_d]
+    xorps   xmm1, [f_signmask]
+    xorps   xmm2, xmm2
+    call    fz_n3
+    mulss   xmm0, [vk_0_75f]
+    mulss   xmm1, [vk_0_75f]
+    movss   [fz_sd], xmm0
+    movss   [fz_sd + 4], xmm1
+    mov     dword [fz_sd + 8], 0
+    ; верх: кулак − g·L·d, низ: кулак + (1 − g)·L·d (L = 13)
+    movss   xmm3, [fz_shg]
+    mulss   xmm3, [vk_13f]
+    xorps   xmm3, [f_signmask]
+    call    .dl
+    mov     ecx, J_X0 + 11
+    mov     edx, J_HAR
+    call    fj_off
+    movss   xmm3, [f_1]
+    subss   xmm3, [fz_shg]
+    mulss   xmm3, [vk_13f]
+    call    .dl
+    mov     ecx, J_X0 + 12
+    mov     edx, J_HAR
+    call    fj_off
+    ; штык
+    movss   xmm0, [fz_sd]
+    movss   xmm1, [fz_sd + 4]
+    xorps   xmm2, xmm2
+    mov     ecx, J_X0 + 15
+    mov     edx, J_X0 + 12
+    call    fj_off
+    movss   xmm0, [fz_sd]
+    xorps   xmm0, [f_signmask]
+    movss   xmm1, [fz_sd + 4]
+    xorps   xmm1, [f_signmask]
+    xorps   xmm2, xmm2
+    mov     ecx, J_X0 + 16
+    mov     edx, J_X0 + 12
+    call    fj_off
+    movss   xmm0, [fz_db]
+    addss   xmm0, [fz_sd]
+    movss   xmm1, [fz_db + 4]
+    addss   xmm1, [fz_sd + 4]
+    movss   xmm2, [fz_db + 8]
+    mov     ecx, J_X0 + 17
+    mov     edx, J_X0 + 12
+    call    fj_off
+    movss   xmm0, [fz_db]
+    subss   xmm0, [fz_sd]
+    movss   xmm1, [fz_db + 4]
+    subss   xmm1, [fz_sd + 4]
+    movss   xmm2, [fz_db + 8]
+    mov     ecx, J_X0 + 18
+    mov     edx, J_X0 + 12
+    call    fj_off
+    add     rsp, 32
+    pop     rbx
+    ret
+; xmm3 = длина -> xmm0-2 = fz_d·длина
+.dl:
+    movss   xmm0, [fz_d]
+    mulss   xmm0, xmm3
+    movss   xmm1, [fz_d + 4]
+    mulss   xmm1, xmm3
+    movss   xmm2, [fz_d + 8]
+    mulss   xmm2, xmm3
+    ret
+; xmm0-2 -> единичный (портит xmm3, xmm4)
+fz_n3:
+    movaps  xmm3, xmm0
+    mulss   xmm3, xmm0
+    movaps  xmm4, xmm1
+    mulss   xmm4, xmm1
+    addss   xmm3, xmm4
+    movaps  xmm4, xmm2
+    mulss   xmm4, xmm2
+    addss   xmm3, xmm4
+    maxss   xmm3, [vk_1em4]
+    sqrtss  xmm3, xmm3
+    movss   xmm4, [f_1]
+    divss   xmm4, xmm3
+    mulss   xmm0, xmm4
+    mulss   xmm1, xmm4
+    mulss   xmm2, xmm4
     ret
 
 ; капсулы фигуры по типу (fw уже в мире)
@@ -868,8 +999,9 @@ fz_emit:
 .tools:
     cmp     dword [fz_lying], 0
     jne     .out
-    FPE     J_HAR, J_X0 + 11, fr_handle, FM_WOOD
-    FPE     J_X0 + 11, J_X0 + 12, fr_blade, FM_METAL
+    FPE     J_X0 + 11, J_X0 + 12, fr_handle, FM_WOOD
+    FPE     J_X0 + 15, J_X0 + 17, fr_blade, FM_METAL
+    FPE     J_X0 + 16, J_X0 + 18, fr_blade, FM_METAL
     FPE     J_HAL, J_X0 + 13, fr_flash, FM_MITT
     FPE     J_X0 + 14, J_X0 + 14, fr_lens, FM_LENS
 .out:
@@ -993,33 +1125,92 @@ fz_player:
     mov     dword [fz_lying], 1
     jmp     .out
 .alive:
-    ; шаг: цикл — два шага по 0.36 тайла
+    ; шаг: цикл — два шага (фаза копится по пройденному, на бегу шаг длиннее — game.inc);
+    ; бег (pl_runb 0..1, плавно): шире шаг, пятка выше, полёт, корпус вперёд
+    mov     dword [fz_run], 0
     cmp     dword [pl_moving], 0
     je      .idle
+    mov     eax, [pl_runb]
+    mov     [fz_run], eax
     movss   xmm0, [rbx + E_AN]
     mulss   xmm0, [fk_pph]
     movss   [fz_ph], xmm0
-    mov     dword [fz_A], __float32__(0.42)
-    mov     dword [fz_lean], __float32__(0.06)
-    cmp     dword [pl_sprint], 0
-    je      .idle
-    mov     dword [fz_A], __float32__(0.62)
-    mov     dword [fz_lean], __float32__(0.2)
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_0_28f]
+    addss   xmm0, [vk_0_42f]
+    movss   [fz_A], xmm0
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_0_24f]
+    addss   xmm0, [vk_0_06f]
+    movss   [fz_lean], xmm0
 .idle:
-    ; фонарик — вперёд, лопата внизу, качается с шагом
-    mov     dword [fz_aL], __float32__(0.8)
-    mov     dword [fz_bL], __float32__(0.55)
+    ; голова прямо, хоть корпус и наклонён
+    movss   xmm0, [fz_lean]
+    mulss   xmm0, [vk_m0_6f]
+    movss   [fz_hnod], xmm0
     movss   xmm0, [fz_ph]
     call    fsin
+    movss   [fz_sp], xmm0
+    ; фонарик — вперёд; на бегу локоть согнут, рука работает против правой
+    movss   xmm0, [fz_sp]
+    mulss   xmm0, [vk_0_3]
+    addss   xmm0, [vk_0_25]
+    mulss   xmm0, [fz_run]
+    movss   xmm1, [vk_0_8]
+    subss   xmm1, xmm0
+    movss   [fz_aL], xmm1
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_0_4]
+    addss   xmm0, [vk_0_55]
+    movss   [fz_bL], xmm0
+    ; правая с лопатой: ходьба — плечо качается с шагом, бег — рука согнута и работает
+    movss   xmm0, [fz_sp]
     mulss   xmm0, [fz_A]
     mulss   xmm0, [vk_0_6]
+    movss   xmm1, [fz_sp]
+    mulss   xmm1, [f_0_5]
+    subss   xmm1, xmm0
+    mulss   xmm1, [fz_run]
+    addss   xmm0, xmm1
     addss   xmm0, [vk_0_3]
     movss   [fz_aR], xmm0
-    mov     dword [fz_sR], __float32__(0.14)
-    ; взмах лопатой: рука на уровне плеча, заносится справа-сзади и идёт влево-вперёд
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [f_1]
+    addss   xmm0, [vk_0_25]
+    movss   [fz_bR], xmm0
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_m0_04f]
+    addss   xmm0, [vk_0_14f]
+    movss   [fz_sR], xmm0
+    ; черенок в кулаке: ходьба — висит вперёд-вниз, взят у верха (θ 1.15, хват 0.12);
+    ; бег — почти лёжа вперёд, штык чуть вниз, взят посередине (θ 0.28, хват 0.45)
+    mov     dword [fz_shm], 0
+    movss   xmm0, [fz_sp]
+    mulss   xmm0, [fz_A]
+    mulss   xmm0, [vk_0_3]
+    addss   xmm0, [vk_1_15f]            ; θ ходьбы
+    movss   xmm1, [fz_sp]
+    mulss   xmm1, [vk_m0_2]
+    addss   xmm1, [vk_0_28f]            ; θ бега
+    subss   xmm1, xmm0
+    mulss   xmm1, [fz_run]
+    addss   xmm0, xmm1
+    movss   [fz_sth], xmm0
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_0_33f]
+    addss   xmm0, [vk_0_12]
+    movss   [fz_shg], xmm0
+    movss   xmm0, [fz_run]
+    mulss   xmm0, [vk_m0_06f]
+    addss   xmm0, [vk_0_12]
+    movss   [fz_shs], xmm0
+    ; взмах лопатой: рука на уровне плеча, заносится справа-сзади и идёт влево-вперёд;
+    ; черенок — продолжением предплечья, взят за конец
     movss   xmm0, [pl_swing]
     comiss  xmm0, [f_0]
     jbe     .out
+    mov     dword [fz_shm], 1
+    mov     dword [fz_shg], __float32__(0.08)
     mulss   xmm0, [fk_isw]
     movss   xmm1, [f_1]
     subss   xmm1, xmm0                  ; s 0..1
@@ -1445,8 +1636,19 @@ fig_gallery:
     mov     [rbx + E_PANTS], eax
     lea     rdi, [fgg_rec]
     mov     r14d, -1
+    mov     dword [pl_runb], 0
     cmp     r12d, 6
     je      .pl
+    cmp     r12d, 7
+    jne     .zg
+    ; последний ряд — игрок бегом, фаза своя в каждом повороте
+    mov     dword [pl_runb], __float32__(1.0)
+    mov     dword [pl_moving], 1
+    cvtsi2ss xmm0, r13d
+    mulss   xmm0, [fgg_rph]
+    movss   [rbx + E_AN], xmm0
+    jmp     .pl
+.zg:
     mov     [fz_force], r12d
     lea     r14d, [r12d + 5]
 .pl:
@@ -1457,8 +1659,8 @@ fig_gallery:
     imul    eax, r13d, 75
     add     eax, 42
     mov     [fd_sx_b0], eax
-    imul    eax, r12d, 50
-    add     eax, 44
+    imul    eax, r12d, 44
+    add     eax, 40
     mov     [fd_sy_b0], eax
     mov     dword [fd_gx_b0], 8000
     mov     dword [fd_gy_b0], 8000
@@ -1467,10 +1669,11 @@ fig_gallery:
     cmp     r13d, 8
     jb      .k
     inc     r12d
-    cmp     r12d, 7
+    cmp     r12d, 8
     jb      .t
     mov     eax, [fgg_pm]
     mov     [pl_moving], eax
+    mov     dword [pl_runb], 0
     ; простой свет: 0.3 + 0.7·N·L, L = (0.2, 0.6, 0.77)
     mov     r15, [fbbits]
     xor     esi, esi
@@ -1526,6 +1729,7 @@ align 4, db 0
 fgg_45:     dd 0.7853982
 fgg_22:     dd 0.3926991
 fgg_an:     dd 0.18
+fgg_rph:    dd 0.09                     ; бег: восьмая цикла на поворот
 fk_pph:     dd 8.7266463                ; 2π / 0.72 тайла
 fk_zph:     dd 12.566371                ; 2π / 0.5
 fk_isw:     dd 4.5454545                ; 1 / 0.22 (взмах)
@@ -1567,6 +1771,21 @@ vk_2_857:   dd 2.857143
 vk_pi:      dd 3.1415927
 vk_1_67:    dd 1.6666667
 vk_m0_3:    dd -0.3
+vk_0_28f:   dd 0.28
+vk_15_3f:   dd 15.3
+vk_0_36f:   dd 0.36
+vk_0_42f:   dd 0.42
+vk_0_24f:   dd 0.24
+vk_0_06f:   dd 0.06
+vk_m0_06f:  dd -0.06
+vk_m0_6f:   dd -0.6
+vk_m0_04f:  dd -0.04
+vk_0_14f:   dd 0.14
+vk_1_15f:   dd 1.15
+vk_0_33f:   dd 0.33
+vk_3_4f:    dd 3.4
+vk_13f:     dd 13.0
+vk_0_75f:   dd 0.75
 ; радиусы капсул, U
 fr_torso1:  dd 4.3
 fr_torso2:  dd 4.6
@@ -1591,7 +1810,7 @@ fr_brim:    dd 0.75
 fr_shawl:   dd 2.5
 fr_eye:     dd 0.55
 fr_handle:  dd 0.45
-fr_blade:   dd 1.3
+fr_blade:   dd 0.95                     ; штык — две внахлёст
 fr_flash:   dd 0.7
 fr_lens:    dd 0.6
 ; палитра игрока: кожа, волосы, ушанка, ватник, отделка, штаны, валенки, варежки,
@@ -1634,7 +1853,16 @@ fz_sR:      dd 0.0
 fz_yL:      dd 0.0
 fz_yR:      dd 0.0
 fz_limp:    dd 0                        ; хромая нога: 0 нет, 1 левая, 2 правая
+fz_run:     dd 0.0                      ; бег 0..1: шаг шире, пятка выше, полёт
+fz_shm:     dd 0                        ; черенок: 0 — по fz_sth, 1 — по предплечью (взмах)
+fz_sth:     dd 0.0                      ; наклон черенка вниз от горизонтали
+fz_shg:     dd 0.0                      ; доля черенка позади кулака
+fz_shs:     dd 0.0                      ; черенок вбок
 FZ_POSEN    equ ($ - fz_pose) / 4
+fz_sp:      dd 0.0
+fz_d:       dd 0.0, 0.0, 0.0            ; черенок: направление, штык, вбок
+fz_db:      dd 0.0, 0.0, 0.0
+fz_sd:      dd 0.0, 0.0, 0.0
 fz_cph:     dd 0.0
 fz_sph:     dd 0.0
 fz_tL:      dd 0.0

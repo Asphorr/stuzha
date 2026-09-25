@@ -635,7 +635,12 @@ update_player:
     mulss   xmm1, xmm7
     mov     rcx, rbx
     call    move_ent
+    ; фаза шага и следы: на бегу шаг длиннее (0.5 тайла)
     movss   xmm0, [mv_step]
+    cmp     dword [pl_sprint], 0
+    je      .nst
+    mulss   xmm0, [f_0_72]
+.nst:
     movss   xmm1, [rbx + E_AN]
     addss   xmm1, xmm0
     movss   [rbx + E_AN], xmm1
@@ -669,6 +674,15 @@ update_player:
     je      .nomove
     call    emit_kick                   ; снег из-под ног
 .nomove:
+    ; поза бега — к бегу или шагу за ~0.15 с
+    cvtsi2ss xmm0, dword [pl_sprint]
+    subss   xmm0, [pl_runb]
+    movss   xmm1, [dt]
+    mulss   xmm1, [f_7]
+    minss   xmm1, [f_1]
+    mulss   xmm0, xmm1
+    addss   xmm0, [pl_runb]
+    movss   [pl_runb], xmm0
     cmp     dword [pl_sprint], 0
     jne     .nregen
     ; силы копятся 12/с; озябшему (тепло < 40) — медленнее, до трети
