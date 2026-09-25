@@ -318,6 +318,7 @@ calc_hmap:
     inc     r13d
     cmp     r13d, MAPW
     jb      .ty
+    call    veg_hmap                    ; растения — картами высот своих моделей
     add     rsp, 40
     pop     rbp
     pop     r15

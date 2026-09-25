@@ -44,6 +44,7 @@ start:
     call    gen_streaks                 ; село от них не меняется
     call    gen_frost
     call    gen_sprites
+    call    veg_init                    ; деревья, кусты, пни — модели -> объёмные картинки
     call    gen_props
     call    gen_loot
     call    init_gdi
@@ -429,6 +430,10 @@ run_shot:
     je      .svb
     call    dump_wind
 .svb:
+    cmp     dword [dbg_veg], 0
+    je      .svv
+    call    veg_gallery                 ; --veg: все растения рядами
+.svv:
     cmp     dword [dbg_alb], 0
     je      .sva
     mov     rdi, [fbbits]               ; --albedo: цвета G-буфера как есть
@@ -929,6 +934,13 @@ parse_cmdline:
     mov     dword [dbg_sndt], 1
     jmp     .next
 .nsn:
+    cmp     word [rax+4], 'v'           ; --veg: в shotN.bmp — все растения рядами (отладка)
+    jne     .nvg
+    cmp     word [rax+6], 'e'
+    jne     .nvg
+    mov     dword [dbg_veg], 1
+    jmp     .next
+.nvg:
     cmp     word [rax+4], 'a'           ; --albedo: в shotN.bmp — альбедо без света (отладка)
     jne     .nab
     cmp     word [rax+8], 'b'
@@ -1656,5 +1668,6 @@ wput_clock:
 %include "pool.inc"
 %include "audio.inc"
 %include "asynth.inc"                   ; голоса сложнее слоёв: зов (лай, петух), зёрна (шаги)
+%include "veg.inc"                      ; лес: модели растений -> объёмные картинки
 %include "data.inc"
 %include "bands.inc"                    ; последним: имена копий полос остаются определены

@@ -42,13 +42,15 @@ BAND_NAMES draw_objects, draw_tile, draw_block, shade_top, shade_side, draw_img,
     bk_wface, bk_inner, bk_hid, bk_deco, bk_cloth, \
     bx_x0, bx_y0, bx_x1, bx_y1, bx_z0, bx_h, bx_zt, bx_fc, bx_sh, bx_px, bx_py, bx_u, \
     bx_face, bx_gp, fo_hp, fo_sh, fo_fl, fo_d, fo_box, fo_z0, fo_h, fo_wood, fo_col, \
-    fo_pal, fo_wx, fo_wy, fo_scr, fo_flen, fo_slen
+    fo_pal, fo_wx, fo_wy, fo_scr, fo_flen, fo_slen, \
+    draw_veg, vd_rs, vd_fl, vd_dith, vd_x0, vd_y0, vd_y
 
 %assign BI 0
 %rep NBANDS
 section .text
 %include "objects.inc"
 %include "furn.inc"
+%include "vegdraw.inc"
 %include "roofdraw.inc"
 
 ; ecx = первая строка полосы, edx = за последней: объекты, потом крыши над ними
@@ -126,7 +128,14 @@ fo_wy:      dd 0
 fo_scr:     dd 0
 fo_flen:    dd 0
 fo_slen:    dd 0
+; растения (vegdraw.inc)
+vd_fl:      dd 0
+vd_dith:    dd 0
+vd_x0:      dd 0
+vd_y0:      dd 0
+vd_y:       dd 0
 align 8, db 0
+vd_rs:      dq 0
 bx_sh:      dq 0
 fo_hp:      dq 0
 fo_sh:      dq 0

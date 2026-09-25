@@ -119,7 +119,7 @@ draw_objects:
     sar     ecx, 8
     mov     [cmx], ecx
     lea     r12d, [eax - 24]
-    lea     r13d, [eax + 34]
+    lea     r13d, [eax + 38]                ; снизу — высокие деревья, чьи макушки в кадре
     xor     r14d, r14d
 .d:
     lea     ebp, [r12d + 1]
@@ -222,6 +222,14 @@ draw_tile:
     sar     r8d, 5
     add     r8d, CY0
     mov     [bk_sy], r8d
+    ; растения — объёмные картинки (vegdraw.inc), у них свои рамки на экране
+    mov     r9d, [bk_kind]
+    cmp     r9d, D_SPRUCE
+    je      .veg
+    cmp     r9d, D_BIRCH
+    je      .veg
+    cmp     r9d, D_PINE
+    jae     .veg
     cmp     eax, -40
     jl      .out
     cmp     eax, SCR_W + 40
@@ -542,6 +550,98 @@ draw_tile:
     cmp     dword [rdx + rax*4 + 4], 0xC1FFE0A0
     jne     .out
     mov     dword [rdx + rax*4 + 4], 0x01383C44
+    jmp     .out
+.veg:
+    mov     eax, [bk_ty]
+    shl     eax, 7
+    add     eax, [bk_tx]
+    lea     rdx, [vmap]
+    movzx   eax, word [rdx + rax*2]
+    test    al, al
+    jz      .out
+    mov     [vd_fl], eax
+    movzx   eax, al
+    dec     eax
+    imul    eax, eax, RS_SZ
+    lea     rbx, [vrs]
+    add     rbx, rax
+    mov     [vd_rs], rbx
+    ; грубо мимо экрана (высокие деревья снизу заходят в кадр)
+    mov     eax, [bk_sx]
+    cmp     eax, -64
+    jl      .out
+    cmp     eax, SCR_W + 64
+    jg      .out
+    mov     eax, [bk_sy]
+    cmp     eax, -24
+    jl      .out
+    cmp     eax, SCR_H + 140
+    jg      .out
+    mov     eax, [bk_tx]
+    mov     r9d, [bk_ty]
+    HASH    eax, r9d
+    mov     [bk_seed], eax
+    ; перед игроком ли (как у прочих)
+    mov     eax, [bk_tx]
+    add     eax, [bk_ty]
+    sub     eax, [pdiag]
+    mov     r12d, eax
+    mov     eax, [bk_sx]
+    sub     eax, [psx]
+    mov     r13d, eax
+    sar     r13d, 31
+    xor     eax, r13d
+    sub     eax, r13d
+    mov     r13d, eax
+    ; качание на ветру — как у картинок, размах свой у варианта
+    mov     dword [img_sway], 0
+    cmp     dword [rbx + RS_AMP], 0
+    je      .vns
+    call    .treewind
+    mov     eax, [bk_seed]
+    and     eax, 1023
+    cvtsi2ss xmm0, eax
+    mulss   xmm0, [f_inv163]
+    mov     eax, [bk_seed]
+    shr     eax, 12
+    and     eax, 7
+    cvtsi2ss xmm1, eax
+    mulss   xmm1, [f_0_08]
+    addss   xmm1, [f_1_9]
+    mulss   xmm1, [wind_t]
+    addss   xmm0, xmm1
+    call    fsin
+    movss   xmm1, [sw_vs]
+    andps   xmm1, [f_absmask]
+    mulss   xmm1, [f_0_4]
+    movss   xmm2, [sw_g]
+    mulss   xmm2, [f_0_12]
+    addss   xmm1, xmm2
+    mulss   xmm0, xmm1
+    movss   xmm1, [sw_g]
+    mulss   xmm1, [f_0_8]
+    addss   xmm1, [f_0_9]
+    mulss   xmm1, [sw_vs]
+    addss   xmm0, xmm1
+    cvtsi2ss xmm1, dword [rbx + RS_AMP]
+    mulss   xmm0, xmm1
+    cvtss2si eax, xmm0
+    mov     [img_sway], eax
+.vns:
+    ; просвечивает, если заслоняет игрока
+    mov     dword [vd_dith], 0
+    cmp     r12d, 1
+    jl      .vnd
+    cmp     r12d, 10
+    jg      .vnd
+    mov     eax, [rbx + RS_R]
+    add     eax, 8
+    cmp     r13d, eax
+    jg      .vnd
+    mov     dword [vd_dith], 1
+.vnd:
+    call    draw_veg
+    mov     dword [img_sway], 0
 .out:
     add     rsp, 32
     pop     r13

@@ -254,6 +254,10 @@ emit_puffs:
     movzx   edi, byte [rdx + rax]
     cmp     edi, T_SPRUCE
     je      .tree
+    cmp     edi, T_PINE
+    je      .tree
+    cmp     edi, T_YOUNG
+    je      .tree
     cmp     edi, T_BIRCH
     jne     .nx
 .tree:

@@ -26,8 +26,8 @@ lx_gray:  times 4 dw 1, 2, 1, 0
 lx_d0_7:  dd 0, 1, 2, 3, 4, 5, 6, 7
 lx_d0:    times 8 dd 0
 lx_dffff: times 8 dd 0xFFFF
-lx_d3f:   times 8 dd 0x3F
-lx_dc0:   times 8 dd 0xC0
+lx_d3f:   times 8 dd 0x7F
+lx_dc0:   times 8 dd 0x80
 lx_dff:   times 8 dd 0xFF
 lx_d31:   times 8 dd 31
 lx_d63:   times 8 dd 63
@@ -397,7 +397,7 @@ light_rows_x:
     vmovdqa [rsp + LX_S01], ymm11
     vmovdqa [rsp + LX_S10], ymm12
     vmovdqa [rsp + LX_S11], ymm13
-    ; нормаль: у своего света — без флагов (& 0x3F), у остальных — байт как есть
+    ; нормаль: у своего света — без флага (& 0x7F), у остальных — байт как есть
     vmovdqa ymm5, [rsp + LX_NB]
     vpslld  ymm6, ymm5, 24
     vpsrad  ymm6, ymm6, 31              ; свой свет (NOWN)

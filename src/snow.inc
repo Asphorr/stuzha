@@ -242,13 +242,10 @@ gen_drifts:
 .tree:
     cmp     r15d, 6
     je      .berm
-    ; лунка у ствола: снег вокруг ели не держится
-    cvtsi2ss xmm0, ecx
-    addss   xmm0, [f_0_5]
+    ; лунка у ствола: снег вокруг ели не держится (у основания растения, veg.inc)
+    call    veg_base
     subss   xmm0, xmm6
     mulss   xmm0, xmm0
-    cvtsi2ss xmm1, edx
-    addss   xmm1, [f_0_5]
     subss   xmm1, xmm7
     mulss   xmm1, xmm1
     addss   xmm0, xmm1

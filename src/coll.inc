@@ -22,6 +22,24 @@ build_cmap:
     call    get_tile
     lea     r8, [tcol]
     movzx   r12d, byte [r8 + rax]
+    ; растение: ствол там, где основание (сдвиг из vmap), радиус — по породе
+    ; (куст насквозь — набора нет вовсе, как у tcol)
+    test    r12d, r12d
+    jz      .put
+    lea     r8, [tsp]
+    movzx   ecx, byte [r8 + rax]
+    cmp     ecx, 0xFF
+    je      .nveg
+    imul    r12d, ecx, 9
+    mov     edx, esi
+    shl     edx, 7
+    add     edx, ebx
+    lea     r8, [vmap]
+    movzx   edx, byte [r8 + rdx*2 + 1]
+    and     edx, 15
+    lea     r12d, [r12d + edx + CS_V0]
+    jmp     .put
+.nveg:
     cmp     eax, T_FENCE
     jne     .put
     ; вдоль x, если сосед слева или справа — забор; вдоль y — сверху или снизу

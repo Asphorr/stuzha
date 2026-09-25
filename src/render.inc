@@ -1311,7 +1311,7 @@ light_rows:
     cmp     dword [moon_on], 0
     je      .nomoon
     movzx   eax, byte [rsi + rcx + (nbuf - albedo)]
-    and     eax, 0x3F
+    and     eax, 0x7F
     mov     r15d, [rsi + rax*8 + (msh - albedo)]
     mov     edx, [rsi + rax*8 + (msh - albedo) + 4]
     add     r15d, r12d
@@ -1416,7 +1416,7 @@ light_rows:
     psubusw xmm0, xmm7                  ; грань видит меньше неба
     jmp     .moon
 .own:
-    and     r12d, 0x3F
+    and     r12d, 0x7F
     movd    xmm0, [rsi + rcx*4 + (lbuf - albedo)]
     punpcklbw xmm0, xmm15
 .moon:

@@ -3550,7 +3550,18 @@ audio_frame:
     cmp     edx, T_SPRUCE
     je      .tr
     cmp     edx, T_BIRCH
+    je      .tr
+    ; сосна и подрост шумят хвоей, как ель; ивняк — прутьями, как берёза
+    cmp     edx, T_PINE
+    je      .tsp
+    cmp     edx, T_YOUNG
+    je      .tsp
+    cmp     edx, T_BUSH
     jne     .tn
+    mov     edx, T_BIRCH
+    jmp     .tr
+.tsp:
+    mov     edx, T_SPRUCE
 .tr:
     cvtsi2ss xmm0, eax
     addss   xmm0, [f_0_5]
