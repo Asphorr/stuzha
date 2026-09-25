@@ -67,6 +67,7 @@ draw_veg:
     cmovg   r15d, ecx
     cmp     r14d, r15d
     jge     .out
+    mov     [vd_r1], r15d
 .r:
     ; сдвиг строки: качание ∝ (высота над основанием)²
     xor     r9d, r9d
@@ -90,27 +91,26 @@ draw_veg:
     add     eax, r14d
     mov     [vd_y], eax
     imul    r11d, eax, SCR_W
+    ; пиксель картинки в начале строки и шаг по ней (у зеркальной — справа налево)
+    mov     edi, r14d
+    imul    edi, [rbx + RS_W]
+    mov     r15d, 1
+    test    dword [vd_fl], 0x8000
+    jz      .fw
+    add     edi, [rbx + RS_W]
+    dec     edi
+    mov     r15d, -1
+.fw:
+    add     r9d, [vd_x0]                ; экранный x первого столбца
     xor     esi, esi
 .c:
     cmp     esi, [rbx + RS_W]
     jge     .rn
-    mov     edi, esi
-    test    dword [vd_fl], 0x8000
-    jz      .c1
-    mov     edi, [rbx + RS_W]
-    dec     edi
-    sub     edi, esi
-.c1:
-    mov     eax, r14d
-    imul    eax, [rbx + RS_W]
-    add     edi, eax                    ; пиксель картинки
     mov     rax, [rbx + RS_PX]
     mov     r10d, [rax + rdi*4]
     test    r10d, r10d
     jz      .cn
-    mov     edx, [vd_x0]
-    add     edx, esi
-    add     edx, r9d
+    lea     edx, [r9d + esi]
     cmp     edx, SCR_W
     jae     .cn
     cmp     dword [vd_dith], 0
@@ -126,8 +126,8 @@ draw_veg:
     mov     eax, [rax + rdi*4]
     movsx   ecx, ax
     sar     eax, 16
-    test    dword [vd_fl], 0x8000
-    jz      .c2
+    test    r15d, r15d
+    jns     .c2
     xchg    eax, ecx
 .c2:
     add     ecx, r12d                   ; x
@@ -152,8 +152,8 @@ draw_veg:
     mov     [r8 + rdx*4 + (gposb - albedo)], eax
     mov     rax, [rbx + RS_PN]
     movzx   eax, byte [rax + rdi]
-    test    dword [vd_fl], 0x8000
-    jz      .c3
+    test    r15d, r15d
+    jns     .c3
     lea     r8, [nq_mir]
     movzx   eax, byte [r8 + rax]
 .c3:
@@ -161,10 +161,11 @@ draw_veg:
     mov     [r8 + rdx], al
 .cn:
     inc     esi
+    add     edi, r15d
     jmp     .c
 .rn:
     inc     r14d
-    cmp     r14d, r15d
+    cmp     r14d, [vd_r1]
     jl      .r
 .out:
     add     rsp, 40

@@ -43,7 +43,7 @@ BAND_NAMES draw_objects, draw_tile, draw_block, shade_top, shade_side, draw_img,
     bx_x0, bx_y0, bx_x1, bx_y1, bx_z0, bx_h, bx_zt, bx_fc, bx_sh, bx_px, bx_py, bx_u, \
     bx_face, bx_gp, fo_hp, fo_sh, fo_fl, fo_d, fo_box, fo_z0, fo_h, fo_wood, fo_col, \
     fo_pal, fo_wx, fo_wy, fo_scr, fo_flen, fo_slen, \
-    draw_veg, vd_rs, vd_fl, vd_dith, vd_x0, vd_y0, vd_y, \
+    draw_veg, vd_rs, vd_fl, vd_dith, vd_x0, vd_y0, vd_y, vd_r1, \
     draw_fig, fd_color, fd_rec, fd_sx, fd_sy, fd_gx, fd_gy, fd_iv, fd_iu, fd_ln, fd_list, \
     fd_oxr, fd_ozr, fd_nx, fd_ny, fd_nz, fd_px, fd_py, fd_pz, fd_pix
 
@@ -137,6 +137,7 @@ vd_dith:    dd 0
 vd_x0:      dd 0
 vd_y0:      dd 0
 vd_y:       dd 0
+vd_r1:      dd 0
 ; фигуры (figdraw.inc)
 fd_sx:      dd 0
 fd_sy:      dd 0

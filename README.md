@@ -22,8 +22,8 @@ shovel, a flashlight and a warm izba somewhere nearby. Survive from 17:20 until
 dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
-files. The village, sprites, light, weather and sound are all produced by
-~40k lines of hand-written NASM. The game is a single 480 KB executable.
+files. The village, trees, people, light, weather and sound are all produced by
+~46k lines of hand-written NASM. The game is a single 540 KB executable.
 
 **What's inside**
 
@@ -56,12 +56,32 @@ files. The village, sprites, light, weather and sound are all produced by
   while the next frame is being rendered. Lighting and the
   floor have AVX2 paths (8 pixels per step) next to the SSE2 ones. Every path
   produces the same frame down to the byte, which is checked against the
-  single-threaded SSE2 build. On an i7-7700 a frame takes about 4.3 ms
-  (around 230 fps).
+  single-threaded SSE2 build. On an i7-7700 a frame takes about 4.5 ms
+  (around 220 fps).
 - **The world.** Gabled snow roofs are rasterized in world planes with
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
-  follow the sprite shapes.
+  follow the shapes on screen.
+- **Trees are small 3D models.** At startup every spruce, pine, birch, young
+  spruce, willow, dry weed and stump is grown from thousands of spheres:
+  drooping spruce tiers with snow pillows on top, pine limbs ending in clumps
+  of needles, white birch bark with black lenticels and long hanging twigs.
+  Then the game camera photographs each model into a sprite that keeps a
+  normal and a world position for every pixel. A street lamp lights the near
+  side of a spruce and leaves the far side dark, and the moon casts the shape
+  of the actual crown, so a birch throws a lacy shadow on a roof. Each species
+  has several variants, mirrored and shifted per tile. Pines grow in groves,
+  young spruces and willows fill the forest edge, and dry weeds stand along
+  the fences.
+- **People are posed capsule figures.** The player and the zombies are
+  skeletons of about 25 capsules, posed every frame and ray-cast into the
+  G-buffer. They can face any direction and are lit from any side. When
+  walking, the hips ride on the straight leg. Zombies lurch and some of them
+  limp; they reach forward in a chase, lunge when they strike and reel back
+  when hit. There are six zombie outfits: a quilted jacket with an ushanka, a
+  coat with a headscarf, a sheepskin, a sweater, a cap, and an old woman's
+  shawl. Clothes carry blood and settle snow, and a corpse slowly disappears
+  under it.
 - **Every izba is furnished differently.** When the roof comes off you see
   log walls, whitewash over a painted dado, patterned wallpaper or board
   panelling, and a floor that is bare, red, ochre or grey. There is a bed
@@ -140,6 +160,7 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | `--intro` (with a shot) | draws the title overlay over the shot |
 | `--house N`, `--pick 1\|2` (with `--shot3`) | inside the N-th izba; next to its first item or container, pressing E (and 1–4) just before the shot |
 | `--albedo` (with a shot) | writes the unlit G-buffer colours to `shotN.bmp` |
+| `--veg`, `--figs` (with a shot) | every plant variant in rows; every zombie outfit and the player in eight turns |
 | `--view N` (with a shot) | height of `viewN.bmp` (16:9), 1080 by default |
 | `--bench` (with a shot) | runs the scene in a live window for 600 frames and writes per-pass timings to `bench.bin` |
 | `--threads N`, `--noavx` | limit the render thread pool; use only the SSE2 path |
@@ -155,8 +176,8 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~40 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 480 КБ.
+Село, деревья, люди, свет, погода и звук целиком получаются из ~46 тыс. строк
+NASM, написанных руками. Вся игра — один exe на 540 КБ.
 
 **Что внутри**
 
@@ -186,11 +207,28 @@ runs `--bench` and prints min / median / p90 for every pass.
   считается следующий кадр. У освещения и пола
   есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
   же кадр до байта, это сверяется с однопоточной SSE2-сборкой. На i7-7700 кадр
-  занимает около 4,3 мс (около 230 fps).
+  занимает около 4,5 мс (около 220 fps).
 - **Мир.** Двускатные крыши в снегу растеризуются в мировых плоскостях с
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют
-  форму спрайтов.
+  то, что нарисовано.
+- **Деревья — маленькие 3D-модели.** При запуске каждая ель, сосна, берёза,
+  ёлочка подроста, куст ивняка, бурьян и пень выращиваются из тысяч шариков:
+  у ели никнущие ярусы со снежными подушками, у сосны сучья с пучками хвои на
+  концах, у берёзы белая кора с чёрными чёрточками и длинные свисающие
+  веточки. Потом камера игры «снимает» модель в картинку, где у каждого
+  пикселя есть нормаль и своя точка в мире. Фонарь освещает ближний бок ели, а
+  дальний остаётся тёмным; луна отбрасывает тень настоящей кроны, так что
+  берёза кладёт на крышу кружевную тень. У каждой породы несколько вариантов,
+  на тайле они зеркалятся и сдвигаются. Сосны растут рощами, опушку заполняют
+  подрост и ивняк, вдоль заборов стоит сухой бурьян.
+- **Люди — фигуры из капсул в позе.** Игрок и зомби — скелеты примерно из 25
+  капсул. Поза считается каждый кадр, фигура рисуется лучом в G-буфер, поэтому
+  она может смотреть куда угодно, и свет ложится на неё с любой стороны. На
+  ходу таз едет по прямой ноге. Зомби шатаются, иные хромают, в погоне тянут
+  руки, при ударе делают выпад, а от лопаты отшатываются. Одежда шести видов:
+  ватник с ушанкой, пальто с платком, тулуп, свитер, кепка и бабкина шаль. На
+  одежде кровь и снег, а труп понемногу заметает.
 - **В каждой избе своё убранство.** Когда снимается крыша, внутри видны
   брёвна, побелка над крашеной панелью, обои с узором или вагонка. Пол
   некрашеный, суриком, охрой или серый. Там кровать с лоскутным одеялом,
