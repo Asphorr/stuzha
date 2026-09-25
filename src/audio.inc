@@ -7,7 +7,8 @@
 ;  Фоны — пять четвёрок SVF-фильтров на шуме (SSE: 4 фильтра разом) и две четвёрки
 ;  синусов (провода, гул фонарей). События — голоса: шум/щелчки + осциллятор -> два
 ;  SVF, огибающая, глиссандо, дрожь, АМ; панорама и глушение по расстоянию, стенам и
-;  ветру (по ветру слышно дальше). Реверб Шрёдера, мягкий предел.
+;  ветру (по ветру слышно дальше). Голоса сложнее — зов (лай, петух) и зёрна (шаги,
+;  треск) — в asynth.inc. Реверб — сеть из 8 задержек, мягкий предел.
 ;  --wav в режиме снимка пишет то же самое в shotN.wav (проверка без ушей),
 ;  --sndtest — все звуки событий подряд в sndtest.wav.
 ;  Внутри потока звука: вызываемые сохраняют rbx, rsi, rdi, rbp, r12-r15; xmm — любые
@@ -20,7 +21,7 @@ ABLK        equ 512                     ; кадров в блоке
 ANBUF       equ 5                       ; блоков в очереди устройства
 ASUB        equ 32                      ; кусок голоса: огибающая и фильтры — по кускам
 NVOICE      equ 64
-VSZ         equ 256
+VSZ         equ 512
 NEV         equ 128                     ; кольцо событий
 EVSZ        equ 64
 NQUAD       equ 5
@@ -75,6 +76,8 @@ EV_RV       equ 20                      ; в реверб
 EV_P        equ 24                      ; высота
 EV_VOL      equ 28
 EV_DEL      equ 32                      ; задержка, с
+EV_SEED     equ 36                      ; зерно голоса (0 — любое): эхо — та же копия
+EV_A        equ 40                      ; сила шага / хрипота голоса (0 — обычная)
 
 ; голос
 V_ON        equ 0                       ; звук + 1; 0 — свободен
@@ -111,6 +114,7 @@ V_NS        equ 120
 V_DUR       equ 124
 V_F1        equ 128
 V_F2        equ 192
+V_KIND      equ 248                     ; 0 — слои; зов, зёрна — asynth.inc (свои поля с 128)
 ; фильтр голоса (от V_F1/V_F2): TPT SVF — v1 = a1·i1 + a2·(x − i2), v2 = i2 + g·v1
 F_MD        equ 0                       ; 0 нет, 1 ФНЧ, 2 полоса, 3 ФВЧ
 F_FC        equ 4
@@ -224,7 +228,11 @@ SN_BRK      equ 23
 SN_FLUMP    equ 24
 SN_ROOSTER  equ 25
 SN_INHALE   equ 26
-NSND        equ 27
+SN_FCREAK   equ 27                      ; половица скрипит
+SN_GROWLD   equ 28                      ; цепной пёс рычит
+SN_CHAIN    equ 29                      ; цепь звякает
+SN_SIZZLE   equ 30                      ; сырое полено шипит
+NSND        equ 31
 
 ; ---------------------------------------------------------------- устройство
 ; открыть waveOut и запустить поток; нет устройства — игра молча идёт без звука
@@ -760,7 +768,7 @@ ev_start:
     movzx   r14d, byte [rdx + rax*2 + 1]
 .lay:
     test    r14d, r14d
-    jz      .out
+    jz      .xk
     imul    edi, r13d, LYSZ
     lea     rax, [lay_tab]
     add     rdi, rax
@@ -773,6 +781,27 @@ ev_start:
     inc     r13d
     dec     r14d
     jmp     .lay
+.xk:
+    ; голос сложнее слоёв (asynth.inc): зов или зёрна
+    mov     eax, [rsi + EV_SND]
+    lea     rdx, [snd_xk]
+    movzx   ecx, byte [rdx + rax*2]
+    movzx   r13d, byte [rdx + rax*2 + 1]
+    test    ecx, ecx
+    jz      .out
+    cmp     ecx, VK_CALL
+    jne     .gr
+    lea     rax, [cd_tab]
+    mov     rdi, [rax + r13*8]
+    call    voice_alloc
+    call    call_fill
+    jmp     .out
+.gr:
+    imul    edi, r13d, GDSZ
+    lea     rax, [gd_snow]
+    add     rdi, rax
+    call    voice_alloc
+    call    grain_fill
 .out:
     add     rsp, 40
     pop     r14
@@ -1128,6 +1157,17 @@ voice_run:
 .go:
     mov     dword [rbx + V_DEL], 0
     mov     r13d, eax
+    mov     eax, [rbx + V_KIND]
+    test    eax, eax
+    jz      .lay
+    cmp     eax, VK_CALL
+    jne     .gr
+    call    call_run
+    jmp     .ret
+.gr:
+    call    grain_run
+    jmp     .ret
+.lay:
     mov     r8d, [rbx + V_NS]
     movss   xmm13, [rbx + V_PH]
     movss   xmm12, [rbx + V_IM]
@@ -1686,21 +1726,47 @@ acc_fold:
     ret
 
 ; ---------------------------------------------------------------- реверб
-; 4 гребёнки с ФНЧ в обратной связи на общий вход, стерео — разными суммами гребёнок,
-; по 2 фазовращателя на ухо. В избе — короче и глуше
-%macro COMB 4
+; сеть из 8 задержек 25–52 мс (FDN): выходы линий через ФНЧ глушения, смешаны матрицей
+; Хаусхолдера (x − ¼·Σx — без потерь, каждая линия кормит все), обратно — с затуханием
+; по длине линии (хвост гаснет ровно, T60 как у прежних гребёнок); вход — в линии с
+; разными знаками, уши — разными суммами линий, по 2 фазовращателя на ухо. Не звенит
+; нотой, как 4 гребёнки. В избе — короче и глуше
+RVN         equ 8
+RVM         equ 4095                    ; длина буфера линии − 1
+; линия %1 (длина %2): y -> ФНЧ -> xmm1..; в xmm4 копится Σ
+%macro FDNRD 2
     lea     eax, [r8 - %2]
-    and     eax, 2047
-    movss   %4, [r9 + rax*4 + %1*8192]
-    subss   %3, %4
-    mulss   %3, xmm13
-    addss   %3, %4                      ; f = y + (f − y)·глушь
-    movaps  xmm7, %3
-    mulss   xmm7, xmm12
-    addss   xmm7, xmm0
+    and     eax, RVM
+    movss   xmm0, [r9 + rax*4 + %1*(RVM+1)*4]
+    movss   xmm1, [rv_f + %1*4]
+    subss   xmm1, xmm0
+    mulss   xmm1, xmm13
+    addss   xmm1, xmm0                  ; f = y + (f − y)·глушь
+    movss   [rv_f + %1*4], xmm1
+    addss   xmm4, xmm1
+%endmacro
+; линия %1: (f − ¼Σ)·g + вход·знак -> в буфер; f — в уши со знаками %2 (L), %3 (R)
+%macro FDNWR 3
+    movss   xmm1, [rv_f + %1*4]
+    movaps  xmm0, xmm1
+    subss   xmm0, xmm4
+    mulss   xmm0, [rv_g + %1*4]
+%if %2 > 0
+    addss   xmm5, xmm1
+%else
+    subss   xmm5, xmm1
+%endif
+%if %3 > 0
+    addss   xmm6, xmm1
+%else
+    subss   xmm6, xmm1
+%endif
+    movss   xmm1, [rv_in + %1*4]
+    mulss   xmm1, xmm3
+    addss   xmm0, xmm1
     mov     eax, r8d
-    and     eax, 2047
-    movss   [r9 + rax*4 + %1*8192], xmm7
+    and     eax, RVM
+    movss   [r9 + rax*4 + %1*(RVM+1)*4], xmm0
 %endmacro
 
 %macro ALLP 3
@@ -1720,37 +1786,63 @@ acc_fold:
 %endmacro
 
 rev_run:
-    movss   xmm12, [bs + AP_IN]
-    movaps  xmm13, xmm12
-    mulss   xmm12, [ac_m0_16]
-    addss   xmm12, [ac_0_74]            ; обратная связь
+    push    rbx
+    sub     rsp, 32
+    ; затухание за проход линии: g = fb^(длина / 1400) — хвост гаснет одинаково во всех
+    ; линиях; fb = 0.74 на улице, 0.58 в избе (T60 ≈ 0.7 и 0.4 с, как у прежних гребёнок)
+    movss   xmm0, [bs + AP_IN]
+    mulss   xmm0, [ac_m0_16]
+    addss   xmm0, [ac_0_74]
+    movss   [at_t1], xmm0
+    fld1
+    fld     dword [at_t1]
+    fyl2x                               ; log2 fb
+    fstp    dword [at_t1]
+    xor     ebx, ebx
+.g:
+    lea     rdx, [rv_len]
+    cvtsi2ss xmm0, dword [rdx + rbx*4]
+    mulss   xmm0, [ac_i1400]
+    mulss   xmm0, [at_t1]               ; log2 g
+    mulss   xmm0, [ac_ln2]
+    call    a_exp
+    lea     rdx, [rv_g]
+    movss   [rdx + rbx*4], xmm0
+    inc     ebx
+    cmp     ebx, RVN
+    jb      .g
+    movss   xmm13, [bs + AP_IN]
     mulss   xmm13, [ac_0_3]
     addss   xmm13, [ac_0_3]             ; глушь
-    movss   xmm8, [rv_f]
-    movss   xmm9, [rv_f + 4]
-    movss   xmm10, [rv_f + 8]
-    movss   xmm11, [rv_f + 12]
     mov     r8d, [rv_p]
     lea     r9, [rv_c]
     lea     r10, [rv_a]
     lea     rdx, [mixL]
     xor     r11d, r11d
 .l:
-    movss   xmm0, [rdx + r11*4 + ABLK*8]
-    COMB    0, 1116, xmm8, xmm1
-    COMB    1, 1277, xmm9, xmm2
-    COMB    2, 1422, xmm10, xmm3
-    COMB    3, 1617, xmm11, xmm4
-    movaps  xmm5, xmm1
-    subss   xmm5, xmm2
-    addss   xmm5, xmm3
-    subss   xmm5, xmm4
-    mulss   xmm5, [ac_0_3]
-    movaps  xmm6, xmm1
-    addss   xmm6, xmm2
-    subss   xmm6, xmm3
-    subss   xmm6, xmm4
-    mulss   xmm6, [ac_0_3]
+    movss   xmm3, [rdx + r11*4 + ABLK*8]
+    xorps   xmm4, xmm4
+    FDNRD   0, 1116
+    FDNRD   1, 1277
+    FDNRD   2, 1422
+    FDNRD   3, 1617
+    FDNRD   4, 1787
+    FDNRD   5, 1949
+    FDNRD   6, 2111
+    FDNRD   7, 2293
+    mulss   xmm4, [ac_0_25]             ; ¼·Σ
+    xorps   xmm5, xmm5
+    xorps   xmm6, xmm6
+    FDNWR   0, 1, 1
+    FDNWR   1, -1, 1
+    FDNWR   2, 1, -1
+    FDNWR   3, -1, -1
+    FDNWR   4, 1, 1
+    FDNWR   5, -1, 1
+    FDNWR   6, 1, -1
+    FDNWR   7, -1, -1
+    mulss   xmm5, [ac_rv_out]
+    mulss   xmm6, [ac_rv_out]
     ALLP    0, 556, xmm5
     ALLP    1, 341, xmm5
     ALLP    2, 579, xmm6
@@ -1765,10 +1857,8 @@ rev_run:
     jb      .l
     and     r8d, 0xFFFFF
     mov     [rv_p], r8d
-    movss   [rv_f], xmm8
-    movss   [rv_f + 4], xmm9
-    movss   [rv_f + 8], xmm10
-    movss   [rv_f + 12], xmm11
+    add     rsp, 32
+    pop     rbx
     ret
 
 ; ---------------------------------------------------------------- выход
@@ -2165,7 +2255,8 @@ bed_ctl:
     movss   xmm1, [ac_0_8]
     xorps   xmm4, xmm4
     call    lane_set
-    ; труба: 95 + 55 s, гуляет; громче в порыв
+    ; труба: 95 + 55 s, гуляет; подвывает только в порыв (GX²) — ровный гул в избе
+    ; слышался как «ветер, да не ветер»
     movss   xmm0, [bs + AP_WF]
     mulss   xmm0, [ac_55]
     addss   xmm0, [ac_95]
@@ -2175,8 +2266,7 @@ bed_ctl:
     mulss   xmm0, xmm1
     movss   [bt_fch], xmm0
     movss   xmm0, [bs + AP_GX]
-    mulss   xmm0, [ac_0_5]
-    addss   xmm0, [ac_0_5]
+    mulss   xmm0, xmm0
     mulss   xmm0, [bt_af]
     mulss   xmm0, [bs + AP_IN]
     mulss   xmm0, [ac_kc]
@@ -2306,20 +2396,53 @@ bed_ctl:
     mulss   xmm2, [ac_0_25]
     xorps   xmm4, xmm4
     call    lane_set
-    ; === 4: печь гудит и трещит, телевизор бубнит за стеной
+    ; === 4: печь гудит и трещит, телевизор бубнит за стеной. Гул — не ровный шорох (тот —
+    ;   ветер), а пламя: трепещет (новая цель в среднем раз в 60 мс, догоняется за ~30),
+    ;   и тихо. Треск — вспышками: всплеск силы гаснет за ~0.4 с, между — редкие щелчки
+    call    a_rndf
+    comiss  xmm0, [ac_0_2]
+    jae     .fl1
+    call    a_rndf
+    movss   [st_flt], xmm0
+.fl1:
+    movss   xmm0, [st_flt]
+    subss   xmm0, [st_fl]
+    mulss   xmm0, [ac_0_35]
+    addss   xmm0, [st_fl]
+    movss   [st_fl], xmm0
+    movss   xmm0, [st_cr]
+    mulss   xmm0, [ac_0_97]
+    movss   [st_cr], xmm0
+    call    a_rndf
+    comiss  xmm0, [ac_0_025]
+    jae     .cr1
+    call    a_rndf
+    mulss   xmm0, [ac_0_8]
+    addss   xmm0, [st_cr]
+    minss   xmm0, [ac_1_5]
+    movss   [st_cr], xmm0
+.cr1:
     mov     ecx, 16
-    movss   xmm0, [ac_220]
-    movss   xmm1, [ac_0_7]
-    movss   xmm2, [bs + AP_FIRE]
+    movss   xmm0, [ac_140]
+    movss   xmm1, [ac_0_8]
+    movss   xmm2, [st_fl]
+    mulss   xmm2, [ac_0_65]
+    addss   xmm2, [ac_0_35]
+    mulss   xmm2, [bs + AP_FIRE]
     mulss   xmm2, [ac_kfi]
     movss   xmm3, [bs + AP_FIRP]
     movaps  xmm4, xmm2
     mulss   xmm4, [ac_0_3]
     call    lane_pan
     mov     ecx, 17
-    movss   xmm0, [ac_2400]
+    movss   xmm0, [st_fl]
+    mulss   xmm0, [ac_0_4]
+    addss   xmm0, [ac_0_8]
+    mulss   xmm0, [ac_2400]
     movss   xmm1, [ac_1_1]
-    movss   xmm2, [bs + AP_FIRE]
+    movss   xmm2, [st_cr]
+    addss   xmm2, [ac_0_12]
+    mulss   xmm2, [bs + AP_FIRE]
     mulss   xmm2, [ac_kcr]
     movss   xmm3, [bs + AP_FIRP]
     movaps  xmm4, xmm2
@@ -2504,16 +2627,29 @@ bed_ctl:
     xorps   xmm1, xmm1
     call    play_int
 .hbd:
-    ; --- печь: щелчки поленьев
+    ; --- печь: поленья стреляют — чаще во вспышку треска; изредка шипит сырое
     movss   xmm0, [bs + AP_FIRE]
     comiss  xmm0, [ac_0_02]
     jbe     .npop
     call    a_rndf
-    movss   xmm1, [bs + AP_FIRE]
+    movss   xmm1, [st_cr]
+    mulss   xmm1, [ac_1_5]
+    addss   xmm1, [ac_0_3]
+    mulss   xmm1, [bs + AP_FIRE]
     mulss   xmm1, [ac_pop_p]
     comiss  xmm0, xmm1
-    jae     .npop
+    jae     .nsz
     mov     ecx, SN_POP
+    movss   xmm0, [bs + AP_FIRE]
+    movss   xmm1, [bs + AP_FIRP]
+    call    play_int
+.nsz:
+    call    a_rndf
+    movss   xmm1, [bs + AP_FIRE]
+    mulss   xmm1, [ac_sz_p]
+    comiss  xmm0, xmm1
+    jae     .npop
+    mov     ecx, SN_SIZZLE
     movss   xmm0, [bs + AP_FIRE]
     movss   xmm1, [bs + AP_FIRP]
     call    play_int
@@ -2540,6 +2676,8 @@ play_int:
     mov     dword [rsi + EV_RV], __float32__(0.08)
     mov     dword [rsi + EV_P], __float32__(1.0)
     mov     dword [rsi + EV_DEL], 0
+    mov     dword [rsi + EV_SEED], 0
+    mov     dword [rsi + EV_A], 0
     call    ev_start
     add     rsp, 32
     pop     rsi
@@ -2648,6 +2786,10 @@ snd_emit:
     mov     [rbx + EV_SND], ecx
     movss   [rbx + EV_VOL], xmm2
     movss   [rbx + EV_P], xmm3
+    mov     eax, [gt_seed]
+    mov     [rbx + EV_SEED], eax
+    mov     eax, [gt_a]
+    mov     [rbx + EV_A], eax
     movss   [gt_sx], xmm0
     movss   [gt_sy], xmm1
     subss   xmm0, [pl + E_X]
@@ -2789,6 +2931,8 @@ snd_emit:
     call    ev_push
 .out:
     mov     dword [gt_del], 0
+    mov     dword [gt_seed], 0
+    mov     dword [gt_a], 0
     mov     byte [gt_nocc], 0
     add     rsp, 48
     pop     rbx
@@ -2806,6 +2950,10 @@ snd_emit_c:
     mov     [rbx + EV_SND], ecx
     movss   [rbx + EV_VOL], xmm2
     movss   [rbx + EV_P], xmm3
+    mov     eax, [gt_seed]
+    mov     [rbx + EV_SEED], eax
+    mov     eax, [gt_a]
+    mov     [rbx + EV_A], eax
     movss   xmm1, [ac_1]
     call    a_pan
     movss   [rbx + EV_GL], xmm0
@@ -2824,6 +2972,8 @@ snd_emit_c:
     mov     [rbx + EV_DEL], eax
     call    ev_push
     mov     dword [gt_del], 0
+    mov     dword [gt_seed], 0
+    mov     dword [gt_a], 0
     add     rsp, 32
     pop     rbx
     ret
@@ -2871,18 +3021,59 @@ snd_step_pl:
     jne     .s
     mov     ecx, SN_STEP_ROAD
 .s:
+    mov     [rsp + 32], ecx
     movss   xmm2, [ac_0_85]
+    mov     dword [gt_a], __float32__(1.0)
     cmp     dword [pl_sprint], 0
     je      .w
     movss   xmm2, [ac_1_25]
+    mov     dword [gt_a], __float32__(1.5)  ; бегом — чаще и крепче
 .w:
     movss   xmm0, [ac_0_08]             ; левая/правая нога — чуть в стороны
     test    dword [pl + E_FOOT], 1
     jz      .p
     xorps   xmm0, [ac_sign]
 .p:
+    movss   [rsp + 36], xmm0
     movss   xmm3, [ac_1]
     call    snd_emit_c
+    ; половица: у каждой доски свой нрав (хеш тайла) — каждая третья скрипит, когда на
+    ; неё ступишь, и всегда своим голосом
+    cmp     dword [rsp + 32], SN_STEP_WOOD
+    jne     .out
+    cvttss2si eax, [pl + E_X]
+    cvttss2si ecx, [pl + E_Y]
+    imul    eax, eax, 73856093
+    imul    ecx, ecx, 19349663
+    xor     eax, ecx
+    mov     ecx, eax
+    shr     ecx, 13
+    xor     eax, ecx
+    imul    eax, eax, 0x5BD1E995
+    mov     ecx, eax
+    shr     ecx, 15
+    xor     eax, ecx
+    mov     ecx, eax
+    and     ecx, 7
+    cmp     ecx, 3
+    jae     .out
+    shr     eax, 8
+    movzx   eax, al
+    cvtsi2ss xmm3, eax
+    mulss   xmm3, [ac_i255]
+    mulss   xmm3, [ac_0_45]
+    addss   xmm3, [ac_0_8]
+    movss   [rsp + 32], xmm3
+    call    g_rndf
+    comiss  xmm0, [ac_0_75]
+    jae     .out
+    mov     dword [gt_del], __float32__(0.03)
+    mov     ecx, SN_FCREAK
+    movss   xmm0, [rsp + 36]
+    movss   xmm2, [ac_0_9]
+    movss   xmm3, [rsp + 32]
+    call    snd_emit_c
+.out:
     add     rsp, 40
 .no:
     ret
@@ -2919,9 +3110,11 @@ snd_step_z:
     inc     dword [gt_zsteps]
     sub     rsp, 40
     movss   xmm2, [ac_0_9]
+    mov     dword [gt_a], __float32__(1.0)
     cmp     dword [rbx + E_ST], ST_CHASE
     jne     .v
     movss   xmm2, [ac_1_2]
+    mov     dword [gt_a], __float32__(1.35)
 .v:
     mov     ecx, SN_STEP_Z
     movss   xmm0, [rbx + E_X]
@@ -3777,13 +3970,16 @@ az_voices:
     add     rsp, 8
     ret
 
-; --- собаки по селу: вдали лают сериями (иногда воют, иногда отвечает другая); в бурю
+; --- собаки по селу: у каждой свой двор за околицей и свой голос (audio_newgame); лают
+; сериями — неровно, иногда «гав-гав» подряд, последний тише; иногда воют (чаще глубокой
+; ночью), иногда отвечает соседка, а там и третья; лай отдаётся эхом от леса. В бурю
 ; прячутся. По ветру слышно дальше — это уже в snd_emit
 az_dogs:
     push    rbx
     push    r12
     push    r13
-    sub     rsp, 32
+    push    r14
+    sub     rsp, 40
     movss   xmm0, [dog_t]
     subss   xmm0, [dt]
     movss   [dog_t], xmm0
@@ -3796,121 +3992,225 @@ az_dogs:
     movss   xmm0, [wind_g]
     comiss  xmm0, [ac_1_25]
     ja      .out
-    xor     r13d, r13d                  ; задержка ответа
-    mov     r12d, 1
+    mov     dword [gt_dd], 0            ; задержка от «сейчас», копится по сериям
+    call    g_rndf
+    mulss   xmm0, [ac_nfd]
+    cvttss2si r12d, xmm0                ; кто начнёт
+    mov     r14d, 1
+    call    g_rndf
+    comiss  xmm0, [ac_0_35]
+    jae     .dog
+    inc     r14d                        ; ответит соседка
     call    g_rndf
     comiss  xmm0, [ac_0_3]
-    jae     .one
-    inc     r12d                        ; ответит вторая
-.one:
-    call    dog_place
-    call    g_rndf
-    mulss   xmm0, [ac_0_3]
-    addss   xmm0, [ac_0_85]
-    movss   [gt_dp], xmm0               ; голос этой собаки
+    jae     .dog
+    inc     r14d                        ; ...и ещё одна
+.dog:
+    lea     rdx, [fd_x]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_sx], eax
+    lea     rdx, [fd_y]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_sy], eax
+    lea     rdx, [fd_p]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_dp], eax
     ; воет — реже, чаще глубокой ночью (с 23 до 4)
-    movss   xmm1, [ac_0_12]
+    movss   xmm1, [ac_0_08]
     movss   xmm0, [gtime]
     comiss  xmm0, [ac_1380]
     jb      .hw
     comiss  xmm0, [ac_1680]
     ja      .hw
-    movss   xmm1, [ac_0_3]
+    movss   xmm1, [ac_0_25]
 .hw:
     movss   [gt_t1], xmm1
     call    g_rndf
     comiss  xmm0, [gt_t1]
     jae     .bark
-    movss   xmm0, [gt_dd]
-    movss   [gt_del], xmm0
+    mov     eax, [gt_dd]
+    mov     [gt_del], eax
+    mov     byte [gt_nocc], 1
     mov     ecx, SN_HOWL
     movss   xmm0, [gt_sx]
     movss   xmm1, [gt_sy]
     movss   xmm2, [ac_1]
     movss   xmm3, [gt_dp]
-    call    snd_emit
+    mulss   xmm3, [ac_0_85]
+    call    snd_emit_e
+    movss   xmm0, [gt_dd]
+    addss   xmm0, [ac_1_5]
+    movss   [gt_dd], xmm0
     jmp     .next
 .bark:
     call    g_rndf
-    mulss   xmm0, [ac_4]
+    mulss   xmm0, [ac_5]
     cvttss2si ebx, xmm0
-    add     ebx, 2                      ; 2..5 раз
+    add     ebx, 2                      ; 2..6 раз
     call    g_rndf
     mulss   xmm0, [ac_0_2]
     addss   xmm0, [ac_0_3]
-    movss   [gt_t2], xmm0               ; шаг лая
+    movss   [gt_t2], xmm0               ; шаг лая этой серии
 .b:
     call    g_rndf
-    mulss   xmm0, [ac_0_1]
-    addss   xmm0, [gt_t2]
+    comiss  xmm0, [ac_0_18]
+    jb      .dbl
+    call    g_rndf
+    mulss   xmm0, [ac_0_5]
+    addss   xmm0, [ac_0_75]
+    mulss   xmm0, [gt_t2]
+    jmp     .bd
+.dbl:
+    movss   xmm0, [ac_0_18]             ; «гав-гав»
+.bd:
     addss   xmm0, [gt_dd]
     movss   [gt_dd], xmm0
     movss   [gt_del], xmm0
+    lea     rdx, [fd_r]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_a], eax
     mov     byte [gt_nocc], 1
+    call    g_rndf
+    mulss   xmm0, [ac_0_3]
+    addss   xmm0, [ac_0_85]
+    cmp     ebx, 1
+    jne     .v
+    mulss   xmm0, [ac_0_75]             ; последний — тише
+.v:
+    movss   [gt_t3], xmm0
+    call    g_rndf
+    subss   xmm0, [ac_0_5]
+    mulss   xmm0, [ac_0_1]
+    addss   xmm0, [ac_1]
+    mulss   xmm0, [gt_dp]
+    movaps  xmm3, xmm0
+    movss   xmm2, [gt_t3]
     mov     ecx, SN_BARK
     movss   xmm0, [gt_sx]
     movss   xmm1, [gt_sy]
-    movss   xmm2, [ac_1]
-    movss   xmm3, [gt_dp]
-    call    snd_emit
+    call    snd_emit_e
     dec     ebx
     jnz     .b
 .next:
-    dec     r12d
+    dec     r14d
     jz      .out
-    ; ответ: другая сторона, через 1.2–2.7 с после
+    ; отвечает другая, через 1.2–2.7 с после
+    call    g_rndf
+    mulss   xmm0, [ac_nfd1]
+    cvttss2si eax, xmm0
+    lea     eax, [r12 + rax + 1]
+    xor     edx, edx
+    mov     ecx, NFD
+    div     ecx
+    mov     r12d, edx
     call    g_rndf
     mulss   xmm0, [ac_1_5]
     addss   xmm0, [ac_1_2]
     addss   xmm0, [gt_dd]
-    movss   [gt_t3], xmm0
-    call    dog_place
-    movss   xmm0, [gt_t3]
     movss   [gt_dd], xmm0
-    call    g_rndf
-    mulss   xmm0, [ac_0_3]
-    addss   xmm0, [ac_0_85]
-    movss   [gt_dp], xmm0
-    jmp     .bark
+    jmp     .dog
 .out:
-    add     rsp, 32
+    add     rsp, 40
+    pop     r14
     pop     r13
     pop     r12
     pop     rbx
     ret
 
-; далёкая собака: 30–60 тайлов в случайную сторону -> gt_sx, gt_sy; gt_dd = 0
-dog_place:
-    sub     rsp, 40
+; как snd_emit (ecx = звук, xmm0 = x, xmm1 = y, xmm2 = громкость, xmm3 = высота; gt_del,
+; gt_a, gt_nocc), но голос со своим зерном и с шансом 0.7 — эхо от леса: та же копия
+; звука на 0.2–0.55 с позже, тише и глуше, с другой стороны (источник повёрнут вокруг
+; слушателя на 60–140° и отодвинут)
+snd_emit_e:
+    push    rbx
+    sub     rsp, 80
+    mov     [rsp + 32], ecx
+    movss   [rsp + 36], xmm0
+    movss   [rsp + 40], xmm1
+    movss   [rsp + 44], xmm2
+    movss   [rsp + 48], xmm3
+    call    g_rnd
+    or      eax, 1
+    mov     [rsp + 52], eax
+    mov     [gt_seed], eax
+    mov     eax, [gt_del]
+    mov     [rsp + 56], eax
+    mov     eax, [gt_a]
+    mov     [rsp + 60], eax
+    mov     ecx, [rsp + 32]
+    movss   xmm0, [rsp + 36]
+    movss   xmm1, [rsp + 40]
+    movss   xmm2, [rsp + 44]
+    movss   xmm3, [rsp + 48]
+    call    snd_emit
     call    g_rndf
-    mulss   xmm0, [ac_2pi]
-    movss   [gt_t1], xmm0
+    comiss  xmm0, [ac_0_7]
+    jae     .out
+    call    g_rndf
+    mulss   xmm0, [ac_1_4]
+    addss   xmm0, [ac_1_05]             ; 60°..140°
+    movss   [rsp + 64], xmm0
+    call    g_rnd
+    test    eax, 0x100
+    jz      .l
+    movss   xmm0, [rsp + 64]
+    xorps   xmm0, [ac_sign]
+    movss   [rsp + 64], xmm0
+.l:
+    movss   xmm0, [rsp + 64]
     call    fsin
-    movss   [gt_t2], xmm0
-    movss   xmm0, [gt_t1]
+    movss   [rsp + 68], xmm0            ; sin
+    movss   xmm0, [rsp + 64]
     addss   xmm0, [f_pi_2]
-    call    fsin
-    movss   [gt_t1], xmm0
+    call    fsin                        ; cos
+    movss   xmm2, [rsp + 36]
+    subss   xmm2, [pl + E_X]            ; dx
+    movss   xmm3, [rsp + 40]
+    subss   xmm3, [pl + E_Y]            ; dy
+    movaps  xmm4, xmm2
+    mulss   xmm4, xmm0                  ; dx·c
+    movaps  xmm5, xmm3
+    mulss   xmm5, [rsp + 68]            ; dy·s
+    subss   xmm4, xmm5
+    mulss   xmm2, [rsp + 68]            ; dx·s
+    mulss   xmm3, xmm0                  ; dy·c
+    addss   xmm2, xmm3
+    mulss   xmm4, [ac_1_3]
+    mulss   xmm2, [ac_1_3]
+    addss   xmm4, [pl + E_X]
+    addss   xmm2, [pl + E_Y]
+    movss   [rsp + 36], xmm4
+    movss   [rsp + 40], xmm2
     call    g_rndf
-    mulss   xmm0, [ac_30]
-    addss   xmm0, [ac_30]
-    movss   xmm1, xmm0
-    mulss   xmm0, [gt_t1]
-    addss   xmm0, [pl + E_X]
-    movss   [gt_sx], xmm0
-    mulss   xmm1, [gt_t2]
-    addss   xmm1, [pl + E_Y]
-    movss   [gt_sy], xmm1
-    mov     dword [gt_dd], 0
-    add     rsp, 40
+    mulss   xmm0, [ac_0_35]
+    addss   xmm0, [ac_0_2]
+    addss   xmm0, [rsp + 56]
+    movss   [gt_del], xmm0
+    mov     eax, [rsp + 52]
+    mov     [gt_seed], eax
+    mov     eax, [rsp + 60]
+    mov     [gt_a], eax
+    mov     byte [gt_nocc], 1
+    mov     ecx, [rsp + 32]
+    movss   xmm0, [rsp + 36]
+    movss   xmm1, [rsp + 40]
+    movss   xmm2, [rsp + 44]
+    mulss   xmm2, [ac_0_4]
+    movss   xmm3, [rsp + 48]
+    call    snd_emit
+.out:
+    add     rsp, 80
+    pop     rbx
     ret
 
-; --- собака в будке: лает, когда рядом зомби (5.5 тайла) или игрок (3) — сторож
+; --- собака в будке: лает, когда рядом зомби (5.5 тайла) или игрок (3) — сторож; кидается
+; на цепи (цепь звенит); игрока в 3–5 тайлах сперва облаивает рыком. Голос и хрипота — у
+; каждой будки свои
 az_kennels:
     push    rbx
     push    r12
     push    r13
-    sub     rsp, 32
+    sub     rsp, 48
     xor     r12d, r12d
 .k:
     cmp     r12d, [kn_n]
@@ -3931,12 +4231,30 @@ az_kennels:
     cvtsi2ss xmm1, eax
     addss   xmm1, [f_0_5]
     movss   [gt_sy], xmm1
+    ; голос и хрипота этой будки
+    cvtsi2ss xmm2, r12d
+    mulss   xmm2, [ac_phi]
+    cvttss2si eax, xmm2
+    cvtsi2ss xmm3, eax
+    subss   xmm2, xmm3
+    movaps  xmm3, xmm2
+    mulss   xmm2, [ac_0_4]
+    addss   xmm2, [ac_0_8]
+    movss   [gt_dp], xmm2
+    mulss   xmm3, [ac_2_5]
+    cvttss2si eax, xmm3
+    cvtsi2ss xmm2, eax
+    subss   xmm3, xmm2
+    mulss   xmm3, [ac_0_8]
+    addss   xmm3, [ac_0_9]
+    movss   [rsp + 36], xmm3
     ; игрок
     subss   xmm0, [pl + E_X]
     subss   xmm1, [pl + E_Y]
     mulss   xmm0, xmm0
     mulss   xmm1, xmm1
     addss   xmm0, xmm1
+    movss   [rsp + 32], xmm0
     comiss  xmm0, [ac_900]
     jae     .kn                         ; дальше 30 — не слышно
     comiss  xmm0, [ac_10]
@@ -3963,6 +4281,28 @@ az_kennels:
     add     rbx, ESZ
     dec     ecx
     jnz     .z
+    ; игрок в 3–5 тайлах: рычит
+    movss   xmm0, [rsp + 32]
+    comiss  xmm0, [ac_25]
+    jae     .kn
+    call    g_rndf
+    mulss   xmm0, [ac_2]
+    addss   xmm0, [ac_2_5]
+    lea     rdx, [kn_t]
+    movss   [rdx + r12*4], xmm0
+    mov     eax, [rsp + 36]
+    mov     [gt_a], eax
+    mov     byte [gt_nocc], 1
+    call    g_rndf
+    mulss   xmm0, [ac_0_2]
+    addss   xmm0, [ac_0_9]
+    mulss   xmm0, [gt_dp]
+    movaps  xmm3, xmm0
+    mov     ecx, SN_GROWLD
+    movss   xmm0, [gt_sx]
+    movss   xmm1, [gt_sy]
+    movss   xmm2, [ac_1]
+    call    snd_emit
     jmp     .kn
 .bark:
     call    g_rndf
@@ -3970,14 +4310,15 @@ az_kennels:
     addss   xmm0, [ac_3]
     lea     rdx, [kn_t]
     movss   [rdx + r12*4], xmm0
-    cvtsi2ss xmm0, r12d
-    mulss   xmm0, [ac_phi]
-    cvttss2si eax, xmm0
-    cvtsi2ss xmm1, eax
-    subss   xmm0, xmm1
-    mulss   xmm0, [ac_0_4]
-    addss   xmm0, [ac_0_8]
-    movss   [gt_dp], xmm0
+    ; кидается — цепь звенит
+    mov     dword [gt_del], __float32__(0.05)
+    mov     byte [gt_nocc], 1
+    mov     ecx, SN_CHAIN
+    movss   xmm0, [gt_sx]
+    movss   xmm1, [gt_sy]
+    movss   xmm2, [ac_0_8]
+    movss   xmm3, [ac_1]
+    call    snd_emit
     call    g_rndf
     mulss   xmm0, [ac_4]
     cvttss2si r13d, xmm0
@@ -3990,12 +4331,19 @@ az_kennels:
     addss   xmm0, [gt_dd]
     movss   [gt_dd], xmm0
     movss   [gt_del], xmm0
+    mov     eax, [rsp + 36]
+    mov     [gt_a], eax
     mov     byte [gt_nocc], 1
+    call    g_rndf
+    subss   xmm0, [ac_0_5]
+    mulss   xmm0, [ac_0_08]
+    addss   xmm0, [ac_1]
+    mulss   xmm0, [gt_dp]
+    movaps  xmm3, xmm0
     mov     ecx, SN_BARK
     movss   xmm0, [gt_sx]
     movss   xmm1, [gt_sy]
     movss   xmm2, [ac_1_2]
-    movss   xmm3, [gt_dp]
     call    snd_emit
     dec     r13d
     jnz     .b
@@ -4003,7 +4351,7 @@ az_kennels:
     inc     r12d
     jmp     .k
 .out:
-    add     rsp, 32
+    add     rsp, 48
     pop     r13
     pop     r12
     pop     rbx
@@ -4117,9 +4465,11 @@ az_knocks:
     pop     rbx
     ret
 
-; --- исход ночи и рассвет: смерть — глухой удар; петухи в 6:40 и 7:20 и на рассвете
+; --- исход ночи и рассвет: смерть — глухой удар. Петухи: первые — в полночь, вторые — в
+; два, третьи — перед рассветом (6:40), ещё в 7:20 и на рассвете
 az_misc:
-    sub     rsp, 40
+    push    rbx
+    sub     rsp, 32
     mov     eax, [gstate]
     cmp     eax, [gt_gs]
     je      .roo
@@ -4135,47 +4485,118 @@ az_misc:
 .nd:
     cmp     eax, 2
     jne     .roo
-    call    rooster
+    call    roo_chorus
 .roo:
+    xor     ebx, ebx
+.rt:
+    lea     rdx, [roo_at]
     movss   xmm0, [gtime]
-    comiss  xmm0, [ac_1840]
-    jb      .out
-    test    byte [gt_roo], 1
-    jnz     .r2
-    or      byte [gt_roo], 1
-    call    rooster
-.r2:
-    movss   xmm0, [gtime]
-    comiss  xmm0, [ac_1880]
-    jb      .out
-    test    byte [gt_roo], 2
-    jnz     .out
-    or      byte [gt_roo], 2
-    call    rooster
-.out:
-    add     rsp, 40
+    comiss  xmm0, [rdx + rbx*4]
+    jb      .rn
+    movzx   eax, byte [gt_roo]
+    bts     eax, ebx
+    jc      .rn
+    mov     [gt_roo], al
+    subss   xmm0, [rdx + rbx*4]
+    comiss  xmm0, [ac_10]
+    jae     .rn                         ; давно прошло (ночь начата позже) — молчат
+    call    roo_chorus
+.rn:
+    inc     ebx
+    cmp     ebx, 4
+    jb      .rt
+    add     rsp, 32
+    pop     rbx
     ret
 
-rooster:
+; петухи перекликаются: начинает один (2–3 раза через 4.5–8.5 с), другие отвечают со
+; своих дворов по 1–2 раза — всё задержками вперёд, с эхом
+roo_chorus:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
     sub     rsp, 40
-    call    dog_place
     call    g_rndf
-    mulss   xmm0, [ac_0_2]
-    addss   xmm0, [ac_0_9]
-    movaps  xmm3, xmm0
+    mulss   xmm0, [ac_nro]
+    cvttss2si r12d, xmm0                ; кто начнёт
+    xor     r13d, r13d                  ; который по счёту
+.bird:
+    ; свой двор, голос и хрипота
+    lea     rdx, [ro_x]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_sx], eax
+    lea     rdx, [ro_y]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_sy], eax
+    ; когда начнёт: первый — сразу, другие — через 1.5–6 с после предыдущего
+    xorps   xmm0, xmm0
+    test    r13d, r13d
+    jz      .t0
+    call    g_rndf
+    mulss   xmm0, [ac_4_5]
+    addss   xmm0, [ac_1_5]
+    addss   xmm0, [gt_t3]
+.t0:
+    movss   [gt_t3], xmm0
+    movss   [gt_dd], xmm0
+    ; сколько раз: первый 2–3, другие 1–2
+    call    g_rndf
+    xor     ebx, ebx
+    comiss  xmm0, [ac_0_5]
+    setb    bl
+    movzx   ebx, bl
+    inc     ebx
+    test    r13d, r13d
+    jnz     .c
+    inc     ebx
+.c:
+    lea     rdx, [ro_r]
+    mov     eax, [rdx + r12*4]
+    mov     [gt_a], eax
+    mov     eax, [gt_dd]
+    mov     [gt_del], eax
     mov     byte [gt_nocc], 1
+    call    g_rndf
+    subss   xmm0, [ac_0_5]
+    mulss   xmm0, [ac_0_03]
+    addss   xmm0, [ac_1]
+    lea     rdx, [ro_p]
+    mulss   xmm0, [rdx + r12*4]
+    movaps  xmm3, xmm0
     mov     ecx, SN_ROOSTER
     movss   xmm0, [gt_sx]
     movss   xmm1, [gt_sy]
     movss   xmm2, [ac_1_5]
-    call    snd_emit
+    call    snd_emit_e
+    call    g_rndf
+    mulss   xmm0, [ac_4]
+    addss   xmm0, [ac_4_5]
+    addss   xmm0, [gt_dd]
+    movss   [gt_dd], xmm0
+    dec     ebx
+    jnz     .c
+    ; следующий двор
+    inc     r12d
+    cmp     r12d, NRO
+    jb      .nx
+    xor     r12d, r12d
+.nx:
+    inc     r13d
+    cmp     r13d, NRO
+    jb      .bird
     add     rsp, 40
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
     ret
 
 ; новая игра: таймеры зомби, будки (по карте), собаки, петухи
 audio_newgame:
     push    rdi
-    sub     rsp, 32
+    push    rbx
+    sub     rsp, 40
     lea     rdi, [zst]
     xor     eax, eax
     mov     ecx, MAXE
@@ -4186,6 +4607,55 @@ audio_newgame:
     mov     dword [dog_t], __float32__(9.0)
     mov     dword [kn_gt], __float32__(2.0)
     mov     byte [gt_roo], 0
+    ; собаки — по дворам за околицей (60–90 тайлов от середины), петухи — по селу (30–70):
+    ; у каждой своё место, голос и хрипота на всю ночь
+    xor     ebx, ebx
+.fd:
+    movss   xmm0, [ac_60]
+    movss   xmm1, [ac_30]
+    call    place_ring
+    mov     eax, [gt_sx]
+    lea     rdx, [fd_x]
+    mov     [rdx + rbx*4], eax
+    mov     eax, [gt_sy]
+    lea     rdx, [fd_y]
+    mov     [rdx + rbx*4], eax
+    call    g_rndf
+    mulss   xmm0, [ac_0_45]
+    addss   xmm0, [ac_0_8]
+    lea     rdx, [fd_p]
+    movss   [rdx + rbx*4], xmm0
+    call    g_rndf
+    addss   xmm0, [ac_0_7]
+    lea     rdx, [fd_r]
+    movss   [rdx + rbx*4], xmm0
+    inc     ebx
+    cmp     ebx, NFD
+    jb      .fd
+    xor     ebx, ebx
+.ro:
+    movss   xmm0, [ac_30]
+    movss   xmm1, [ac_40]
+    call    place_ring
+    mov     eax, [gt_sx]
+    lea     rdx, [ro_x]
+    mov     [rdx + rbx*4], eax
+    mov     eax, [gt_sy]
+    lea     rdx, [ro_y]
+    mov     [rdx + rbx*4], eax
+    call    g_rndf
+    mulss   xmm0, [ac_0_3]
+    addss   xmm0, [ac_0_72]
+    lea     rdx, [ro_p]
+    movss   [rdx + rbx*4], xmm0
+    call    g_rndf
+    mulss   xmm0, [ac_1_3]
+    addss   xmm0, [ac_0_7]
+    lea     rdx, [ro_r]
+    movss   [rdx + rbx*4], xmm0
+    inc     ebx
+    cmp     ebx, NRO
+    jb      .ro
     mov     dword [gt_gs], 0
     mov     dword [kn_n], 0
     lea     rdx, [tmap]
@@ -4210,8 +4680,34 @@ audio_newgame:
     inc     eax
     cmp     eax, MAPW*MAPW
     jb      .f
-    add     rsp, 32
+    add     rsp, 40
+    pop     rbx
     pop     rdi
+    ret
+
+; xmm0 = от, xmm1 = разброс: случайная точка на кольце вокруг середины карты -> gt_sx, gt_sy
+place_ring:
+    sub     rsp, 40
+    movss   [rsp + 32], xmm0
+    movss   [rsp + 36], xmm1
+    call    g_rndf
+    mulss   xmm0, [rsp + 36]
+    addss   xmm0, [rsp + 32]
+    movss   [rsp + 32], xmm0
+    call    g_rndf
+    mulss   xmm0, [ac_2pi]
+    movss   [rsp + 36], xmm0
+    call    fsin
+    mulss   xmm0, [rsp + 32]
+    addss   xmm0, [ac_mid]
+    movss   [gt_sy], xmm0
+    movss   xmm0, [rsp + 36]
+    addss   xmm0, [f_pi_2]
+    call    fsin
+    mulss   xmm0, [rsp + 32]
+    addss   xmm0, [ac_mid]
+    movss   [gt_sx], xmm0
+    add     rsp, 40
     ret
 
 ; --sndtest: каждый звук события по очереди (по 216 блоков), потом фоны по одному
@@ -4227,11 +4723,27 @@ aud_sndtest:
     mov     dword [mo_g], __float32__(1.0)
     xor     ebx, ebx
 .s:
+    ; шаги — чередой, лай — серией (sndt_rep, sndt_gap); ноги — чуть в стороны
+    lea     rdx, [sndt_rep]
+    movzx   esi, byte [rdx + rbx]
+    xor     edi, edi
+.rep:
+    cvtsi2ss xmm0, edi
+    lea     rdx, [sndt_gap]
+    mulss   xmm0, [rdx + rbx*4]
+    movss   [gt_del], xmm0
+    movss   xmm0, [ac_0_08]
+    test    edi, 1
+    jz      .rp
+    xorps   xmm0, [ac_sign]
+.rp:
     mov     ecx, ebx
-    xorps   xmm0, xmm0
     movss   xmm2, [ac_1]
     movss   xmm3, [ac_1]
     call    snd_emit_c
+    inc     edi
+    cmp     edi, esi
+    jb      .rep
     mov     dword [wav_owe], 216*ABLK   ; ровно 216 блоков (~2.5 с) на звук
     mov     dword [dt], 0
     call    wav_pump
@@ -4264,6 +4776,49 @@ aud_sndtest:
     call    wav_pump
     jmp     .bed
 .bd:
+    ; издалека, в тишине и безветрии: собака в ~52 тайлах — серия лая с эхом, потом петух
+    ; в ~39 (тот же путь, что в игре: расстояние, воздух, эхо)
+    lea     rdi, [ap]
+    xor     eax, eax
+    mov     ecx, NAP
+    rep     stosd
+    mov     dword [ap + AP_VOL], __float32__(1.0)
+    mov     dword [wind_g], 0
+    xor     ebx, ebx
+.fb:
+    cvtsi2ss xmm0, ebx
+    mulss   xmm0, [ac_0_4]
+    addss   xmm0, [ac_0_2]
+    movss   [gt_del], xmm0
+    mov     eax, [fd_r]
+    mov     [gt_a], eax
+    mov     byte [gt_nocc], 1
+    mov     ecx, SN_BARK
+    movss   xmm0, [pl + E_X]
+    addss   xmm0, [ac_48]
+    movss   xmm1, [pl + E_Y]
+    subss   xmm1, [ac_20]
+    movss   xmm2, [ac_1]
+    movss   xmm3, [fd_p]
+    call    snd_emit_e
+    inc     ebx
+    cmp     ebx, 5
+    jb      .fb
+    mov     dword [gt_del], __float32__(2.6)
+    mov     eax, [ro_r]
+    mov     [gt_a], eax
+    mov     byte [gt_nocc], 1
+    mov     ecx, SN_ROOSTER
+    movss   xmm0, [pl + E_X]
+    subss   xmm0, [ac_30]
+    movss   xmm1, [pl + E_Y]
+    subss   xmm1, [ac_25]
+    movss   xmm2, [ac_1_5]
+    movss   xmm3, [ro_p]
+    call    snd_emit_e
+    mov     dword [wav_owe], 480*ABLK   ; ~5.6 с
+    mov     dword [dt], 0
+    call    wav_pump
     lea     rcx, [s_sndtname]
     call    wav_save
     add     rsp, 32
@@ -4302,64 +4857,40 @@ OSAW        equ 1
 section .rdata
 align 16, db 0
 lay_tab:
-; --- шаг по снегу: хруст пяткой, потом носком (щелчки ломающихся снежинок в полосах),
-;     под ними — мягкий удар веса
+; --- шаг по снегу: хруст — зёрнами (asynth.inc, gd_snow), здесь — мягкий удар веса:
+;     валенок уминает снег, глухо (100–300 Гц)
 L_ssnow:
-    LAYER 1.0, 0, 0.006, 0.33, 0.2, 0.006, 0.035, 0.3, 0.05
-    SRC   1.0, 0, 0, 0.88, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.6, 0
-    FLT   FBP, 1150.0, 0.2, 0.8, 0.08, 1.1, 1.0
-    FLT   FBP, 2900.0, 0.2, 1.0, 0, 1.4, 0.6
+    LAYER 1.0, 0, 0.004, 0.3, 0.25, 0.006, 0.025, 0.3, 0.04
+    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.3, 0
+    FLT   FLP, 240.0, 0.2, 0.7, 0.05, 0.9, 1.0
+    FLT   FBP, 110.0, 0.15, 1.0, 0, 1.5, 0.8
     LEND
-    LAYER 1.0, 0.075, 0.03, 0.21, 0.25, 0.004, 0.025, 0.3, 0.04
-    SRC   1.0, 0, 0, 0.92, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.5, 0
-    FLT   FBP, 1300.0, 0.2, 1.0, 0, 1.2, 1.0
-    FLT   FBP, 3400.0, 0.15, 1.0, 0, 1.5, 0.4
-    LEND
-    LAYER 1.0, 0, 0, 0.15, 0.2, 0.002, 0.01, 0.2, 0.03
-    SRC   0, 0, 1.0, 0, OSIN, 75.0, 0.1, 0.7, 0.03, 0, 0, 0, 0.4, 0
-    NOFLT
-    NOFLT
-    LEND
-; --- по укатанной дороге в мороз: снег скрипит — те же щелчки звенят в узкой полосе
+; --- укатанная дорога: скрип — зёрнами (gd_road), удар — твёрже и короче
 L_sroad:
-    LAYER 1.0, 0, 0.006, 0.32, 0.2, 0.012, 0.06, 0.3, 0.045
-    SRC   1.0, 0, 0, 0.93, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.6, 0
-    FLT   FBP, 1100.0, 0.15, 0.9, 0.1, 1.0, 0.6
-    FLT   FBP, 2200.0, 0.15, 1.18, 0.07, 11.0, 1.3
+    LAYER 1.0, 0, 0.004, 0.3, 0.25, 0.004, 0.015, 0.3, 0.03
+    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.3, 0
+    FLT   FLP, 300.0, 0.2, 0.7, 0.04, 0.9, 1.0
+    FLT   FBP, 130.0, 0.15, 1.0, 0, 1.5, 0.7
     LEND
-    LAYER 1.0, 0.085, 0.03, 0.23, 0.25, 0.008, 0.045, 0.3, 0.035
-    SRC   1.0, 0, 0, 0.94, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.5, 0
-    FLT   FBP, 1500.0, 0.15, 1.0, 0, 1.1, 0.5
-    FLT   FBP, 2700.0, 0.15, 1.12, 0.05, 13.0, 1.3
-    LEND
-    LAYER 1.0, 0, 0, 0.15, 0.2, 0.002, 0.01, 0.2, 0.03
-    SRC   0, 0, 1.0, 0, OSIN, 65.0, 0.1, 0.7, 0.03, 0, 0, 0, 0.4, 0
-    NOFLT
-    NOFLT
-    LEND
-; --- по половицам: глухой стук доски; изредка половица скрипит
+; --- по половицам в валенках: глухой стук, доска отзывается; скрипят свои половицы
+;     (SN_FCREAK из snd_step_pl)
 L_swood:
-    LAYER 1.0, 0, 0.004, 0.38, 0.2, 0.0015, 0.004, 0.3, 0.035
-    SRC   1.0, 0, 0.6, 0, OSIN, 95.0, 0.1, 0.8, 0.04, 0, 0, 0, 0.5, 0
-    FLT   FBP, 190.0, 0.1, 1.0, 0, 3.0, 1.6
-    FLT   FBP, 850.0, 0.15, 1.0, 0, 2.0, 0.35
+    LAYER 1.0, 0, 0.004, 1.2, 0.2, 0.002, 0.012, 0.3, 0.03
+    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.4, 0
+    FLT   FBP, 170.0, 0.12, 1.0, 0, 4.0, 1.4
+    FLT   FLP, 400.0, 0.1, 1.0, 0, 0.8, 0.5
     LEND
-    LAYER 0.12, 0.03, 0.05, 0.15, 0.3, 0.05, 0.12, 0.4, 0.08
-    SRC   0.05, 1.0, 0, 0, OSAW, 38.0, 0.25, 1.5, 0.15, 0.05, 0, 0, 1.0, 0
-    FLT   FBP, 720.0, 0.2, 1.0, 0, 9.0, 4.0
-    FLT   FBP, 1450.0, 0.2, 1.0, 0, 7.0, 2.4
+    LAYER 1.0, 0, 0.004, 0.35, 0.3, 0.001, 0.004, 0.3, 0.012
+    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.2, 0
+    FLT   FBP, 720.0, 0.15, 1.0, 0, 3.0, 1.0
+    FLT   FBP, 1500.0, 0.15, 1.0, 0, 3.0, 0.4
     LEND
-; --- зомби волочит ноги по снегу
+; --- зомби волочит ноги: скребёт — зёрнами (gd_zdrag), здесь — тяжёлый шаг
 L_sz:
-    LAYER 1.0, 0, 0.01, 0.42, 0.25, 0.03, 0.09, 0.4, 0.07
-    SRC   1.0, 0, 0, 0.85, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.8, 0
-    FLT   FBP, 650.0, 0.2, 0.75, 0.1, 1.0, 1.0
-    FLT   FBP, 1900.0, 0.15, 1.0, 0, 1.3, 0.4
-    LEND
-    LAYER 1.0, 0, 0, 0.2, 0.2, 0.003, 0.01, 0.2, 0.04
-    SRC   0, 0, 1.0, 0, OSIN, 60.0, 0.1, 0.7, 0.04, 0, 0, 0, 0.4, 0
-    NOFLT
-    NOFLT
+    LAYER 1.0, 0.02, 0.02, 0.4, 0.25, 0.008, 0.03, 0.3, 0.05
+    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.4, 0
+    FLT   FLP, 220.0, 0.2, 0.7, 0.05, 0.9, 1.0
+    FLT   FBP, 95.0, 0.15, 1.0, 0, 1.5, 0.8
     LEND
 ; --- взмах лопатой: полоса шума съезжает вниз, пока громкость растёт — «вжух»
 L_swing:
@@ -4514,20 +5045,6 @@ L_creak:
     FLT   FBP, 950.0, 0.2, 1.0, 0, 12.0, 4.0
     FLT   FBP, 1900.0, 0.2, 1.0, 0, 10.0, 2.4
     LEND
-; --- лай: «гав» — высокий тон срывается вниз
-L_bark:
-    LAYER 1.0, 0, 0, 0.6, 0.2, 0.008, 0.05, 0.3, 0.05
-    SRC   0.3, 1.0, 0, 0, OSAW, 480.0, 0.12, 0.62, 0.06, 0.04, 0, 0, 0.6, 0.7
-    FLT   FBP, 950.0, 0.12, 0.8, 0.08, 3.0, 1.0
-    FLT   FBP, 2000.0, 0.1, 1.0, 0, 4.0, 0.5
-    LEND
-; --- собака воет вдали
-L_howl:
-    LAYER 1.0, 0, 0, 0.77, 0.2, 0.35, 1.1, 0.3, 0.5
-    SRC   0.1, 1.0, 0, 0, OSAW, 470.0, 0.1, 1.22, 0.7, 0.015, 5.5, 0.12, 3.5, 0.5
-    FLT   FBP, 760.0, 0.1, 1.25, 0.8, 5.0, 1.0
-    FLT   FBP, 1650.0, 0.1, 1.0, 0, 6.0, 0.45
-    LEND
 ; --- сердце: тук-тук
 L_hb:
     LAYER 1.0, 0, 0, 0.35, 0.1, 0.004, 0.01, 0, 0.06
@@ -4547,13 +5064,6 @@ L_death:
     FLT   FLP, 220.0, 0, 1.0, 0, 0.7, 1.0
     NOFLT
     LEND
-; --- печь: щёлкнуло полено
-L_pop:
-    LAYER 1.0, 0, 0, 0.88, 0.4, 0.0003, 0.001, 0.3, 0.004
-    SRC   1.0, 0, 0, 0, OSIN, 0, 0, 1.0, 0, 0, 0, 0, 0.2, 0
-    FLT   FBP, 1900.0, 0.3, 1.0, 0, 2.0, 1.0
-    FLT   FBP, 5000.0, 0.2, 1.0, 0, 1.5, 0.4
-    LEND
 ; --- сломанный фонарь: треск дросселя на вспышке
 L_brk:
     LAYER 1.0, 0, 0, 0.6, 0.3, 0.0003, 0.002, 0.5, 0.006
@@ -4568,28 +5078,6 @@ L_flump:
     FLT   FLP, 450.0, 0.2, 1.0, 0, 0.8, 1.0
     FLT   FBP, 1500.0, 0.2, 1.0, 0, 1.2, 0.35
     LEND
-; --- петух вдали: ку-ка-ре-ку-у
-L_roo:
-    LAYER 1.0, 0, 0, 1.0, 0, 0.02, 0.07, 0, 0.03
-    SRC   0.1, 1.0, 0, 0, OSAW, 620.0, 0.03, 1.05, 0.1, 0.02, 0, 0, 0.6, 0.6
-    FLT   FBP, 1250.0, 0, 1.0, 0, 3.0, 1.0
-    FLT   FBP, 2600.0, 0, 1.0, 0, 4.0, 0.5
-    LEND
-    LAYER 1.0, 0.17, 0, 1.05, 0, 0.02, 0.07, 0, 0.03
-    SRC   0.1, 1.0, 0, 0, OSAW, 700.0, 0.03, 1.04, 0.1, 0.02, 0, 0, 0.6, 0.6
-    FLT   FBP, 1250.0, 0, 1.0, 0, 3.0, 1.0
-    FLT   FBP, 2600.0, 0, 1.0, 0, 4.0, 0.5
-    LEND
-    LAYER 1.0, 0.34, 0, 1.12, 0, 0.02, 0.1, 0, 0.03
-    SRC   0.1, 1.0, 0, 0, OSAW, 790.0, 0.03, 1.03, 0.1, 0.02, 0, 0, 0.6, 0.6
-    FLT   FBP, 1250.0, 0, 1.0, 0, 3.0, 1.0
-    FLT   FBP, 2600.0, 0, 1.0, 0, 4.0, 0.5
-    LEND
-    LAYER 1.0, 0.54, 0, 1.25, 0, 0.03, 0.45, 0.1, 0.15
-    SRC   0.12, 1.0, 0, 0, OSAW, 880.0, 0.03, 0.78, 0.4, 0.03, 9.0, 0.2, 1.4, 0.6
-    FLT   FBP, 1250.0, 0, 1.0, 0, 3.0, 1.0
-    FLT   FBP, 2600.0, 0, 1.0, 0, 4.0, 0.5
-    LEND
 ; --- вдох
 L_inhale:
     LAYER 1.0, 0, 0, 0.11, 0.2, 0.12, 0.04, 0.3, 0.06
@@ -4597,15 +5085,22 @@ L_inhale:
     FLT   FBP, 1700.0, 0.1, 1.2, 0.15, 1.6, 1.0
     FLT   FHP, 3000.0, 0.1, 1.0, 0, 0.7, 0.3
     LEND
+; --- сырое полено шипит: пар рвётся рывками — шершавый шум высоко, дрожит
+L_sizzle:
+    LAYER 1.0, 0, 0, 0.06, 0.3, 0.25, 0.8, 0.5, 0.4
+    SRC   1.0, 0, 0, 0.3, OSIN, 0, 0, 1.0, 0, 0, 7.0, 0.6, 2.5, 0
+    FLT   FBP, 5200.0, 0.2, 0.8, 1.0, 1.4, 1.0
+    FLT   FHP, 7500.0, 0.1, 1.0, 0, 0.7, 0.3
+    LEND
 lay_end:
 
 %define LAYIX(l) ((l - lay_tab) / LYSZ)
 ; звук -> первый слой, сколько слоёв (в порядке SN_*)
 snd_tab:
-    db LAYIX(L_ssnow), 3
-    db LAYIX(L_sroad), 3
+    db LAYIX(L_ssnow), 1
+    db LAYIX(L_sroad), 1
     db LAYIX(L_swood), 2
-    db LAYIX(L_sz), 2
+    db LAYIX(L_sz), 1
     db LAYIX(L_swing), 1
     db LAYIX(L_hit), 3
     db LAYIX(L_kill), 3
@@ -4620,16 +5115,54 @@ snd_tab:
     db LAYIX(L_click), 2
     db LAYIX(L_knock), 2
     db LAYIX(L_creak), 1
-    db LAYIX(L_bark), 1
-    db LAYIX(L_howl), 1
+    db 0, 0                             ; лай — зов
+    db 0, 0                             ; вой — зов
     db LAYIX(L_hb), 2
     db LAYIX(L_death), 1
-    db LAYIX(L_pop), 1
+    db 0, 0                             ; полено — зёрна
     db LAYIX(L_brk), 1
     db LAYIX(L_flump), 1
-    db LAYIX(L_roo), 4
+    db 0, 0                             ; петух — зов
     db LAYIX(L_inhale), 1
+    db 0, 0                             ; половица — зёрна
+    db 0, 0                             ; рык — зов
+    db 0, 0                             ; цепь — зёрна
+    db LAYIX(L_sizzle), 1
 snd_tab_end:
+; звук -> голос из asynth.inc: вид (0 — нет), номер описания
+snd_xk:
+    db VK_GRAIN, GD_SNOW
+    db VK_GRAIN, GD_ROAD
+    db 0, 0
+    db VK_GRAIN, GD_ZDRAG
+    times SN_BARK - SN_SWING db 0, 0
+    db VK_CALL, CD_BARK
+    db VK_CALL, CD_HOWL
+    db 0, 0, 0, 0                       ; сердце, смерть
+    db VK_GRAIN, GD_POP
+    db 0, 0, 0, 0                       ; фонарь, ком снега
+    db VK_CALL, CD_ROO
+    db 0, 0                             ; вдох
+    db VK_GRAIN, GD_FCREAK
+    db VK_CALL, CD_GROWL
+    db VK_GRAIN, GD_CHAIN
+    db 0, 0                             ; шипит
+%if $ - snd_xk != NSND*2
+%error "snd_xk: не по числу звуков"
+%endif
+; --sndtest: сколько раз подряд и через сколько секунд (шаги — ходьбой, лай — серией)
+sndt_rep:
+    db 6, 6, 6, 4                       ; шаги
+    times SN_BARK - SN_SWING db 1
+    db 4, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1
+%if $ - sndt_rep != NSND
+%error "sndt_rep: не по числу звуков"
+%endif
+align 4, db 0
+sndt_gap:
+    dd 0.165, 0.165, 0.165, 0.4
+    times SN_BARK - SN_SWING dd 0.5
+    dd 0.42, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 1.0, 1.0, 1.0
 
 align 4, db 0
 ; --sndtest, фоны по одному: (смещение AP_*, значение)..., −1; в конце −2
@@ -4687,12 +5220,12 @@ ac_kn:      dd 0.38                     ; шорох в ушах, ФНЧ
 ac_knb:     dd 0.25                     ;   полоса
 ac_kf:      dd 0.46                     ; гул над селом
 ac_kb:      dd 0.9                      ; буханье
-ac_kc:      dd 1.4                      ; труба
+ac_kc:      dd 1.0                      ; труба (в порыв)
 ac_kh:      dd 3.0                      ; вой
 ac_ks:      dd 0.5                      ; ели
 ac_kbi:     dd 0.4                      ; берёзы
 ac_khs:     dd 0.14                     ; позёмка
-ac_kfi:     dd 0.45                     ; печь гудит
+ac_kfi:     dd 0.22                     ; печь гудит
 ac_kcr:     dd 1.0                      ;   трещит
 ac_ktv:     dd 1.0                      ; телевизор
 ac_kw:      dd 0.05                     ; провода
@@ -4832,6 +5365,27 @@ ac_6200:    dd 6200.0
 ac_7000:    dd 7000.0
 ac_17000:   dd 17000.0
 ac_1e6:     dd 1000000.0
+ac_i255:    dd 0.003921569
+ac_i1400:   dd 0.000714286
+ac_ln2:     dd 0.69314718
+ac_rv_out:  dd 0.4                      ; реверб: линии -> уши
+rv_len:     dd 1116, 1277, 1422, 1617, 1787, 1949, 2111, 2293   ; = длинам в rev_run
+rv_in:      dd 0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, -0.5       ; вход в линии: знаки
+ac_0_025:   dd 0.025
+ac_0_97:    dd 0.97
+ac_140:     dd 140.0
+ac_sz_p:    dd 0.001                    ; полено шипит: раз в ~12 с на блок
+ac_0_72:    dd 0.72
+ac_20:      dd 20.0
+ac_48:      dd 48.0
+ac_1_3:     dd 1.3
+ac_4_5:     dd 4.5
+ac_5:       dd 5.0
+ac_nfd:     dd 5.0                      ; NFD
+ac_nfd1:    dd 4.0                      ; NFD − 1
+ac_nro:     dd 3.0                      ; NRO
+ac_mid:     dd 64.0                     ; середина карты (MAPW/2)
+roo_at:     dd 1440.0, 1560.0, 1840.0, 1880.0   ; петухи: 0:00, 2:00, 6:40, 7:20
 ac_m1:      dd -1.0
 ac_m0_5:    dd -0.5
 ac_m0_16:   dd -0.16
@@ -4878,7 +5432,7 @@ aud_z0:                                 ; обнуляется в aud_reset
 voices:     resb NVOICE*VSZ
 quads:      resb NQUAD*QSZ
 pquads:     resb NPQ*PQSZ
-rv_c:       resd 4*2048
+rv_c:       resd RVN*(RVM+1)                ; линии реверба
 rv_a:       resd 4*1024
 st_lane:    resq NQUAD*4
 st_frames:  resd 1
@@ -4933,10 +5487,14 @@ tv_sc:      resd 1
 tv_f1:      resd 1
 tv_f2:      resd 1
 hb_ph:      resd 1
+st_fl:      resd 1                      ; печь: трепет пламени, его цель
+st_flt:     resd 1
+st_cr:      resd 1                      ;   сила треска (вспышки)
 mo_g:       resd 1
 mo_l:       resd 1
 mo_r:       resd 1
-rv_f:       resd 4
+rv_f:       resd RVN                    ; ФНЧ глушения линий
+rv_g:       resd RVN                    ; затухание за проход
 rv_p:       resd 1
 ab_out:     resq 1
 alignb 16
@@ -5003,9 +5561,21 @@ gt_dd:      resd 1
 gt_dp:      resd 1
 gt_bprev:   resd 1
 gt_gs:      resd 1
+gt_seed:    resd 1                      ; для snd_emit: зерно голоса (сбрасывается)
+gt_a:       resd 1                      ;   сила/хрипота (сбрасывается)
 dog_t:      resd 1
 kn_gt:      resd 1
 kn_n:       resd 1
+NFD         equ 5                       ; собаки по селу
+NRO         equ 3                       ; петухи
+fd_x:       resd NFD                    ; двор, голос (высота), хрипота — на всю ночь
+fd_y:       resd NFD
+fd_p:       resd NFD
+fd_r:       resd NFD
+ro_x:       resd NRO
+ro_y:       resd NRO
+ro_p:       resd NRO
+ro_r:       resd NRO
 zvt:        resd MAXE
 zsi:        resd MAXE                   ; шаг зомби: номер по пройденному пути
 kn_t:       resd MAXKN

@@ -1655,5 +1655,6 @@ wput_clock:
 %include "hud.inc"
 %include "pool.inc"
 %include "audio.inc"
+%include "asynth.inc"                   ; голоса сложнее слоёв: зов (лай, петух), зёрна (шаги)
 %include "data.inc"
 %include "bands.inc"                    ; последним: имена копий полос остаются определены

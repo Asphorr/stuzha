@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~38k lines of hand-written NASM. The game is a single 460 KB executable.
+~40k lines of hand-written NASM. The game is a single 480 KB executable.
 
 **What's inside**
 
@@ -88,10 +88,18 @@ files. The village, sprites, light, weather and sound are all produced by
   you get to a stove.
 - **Synthesized sound.** A waveOut thread mixes it all in real time from
   filters and oscillators, with no samples. It includes wind that differs
-  between your left and right ear, howling at corners and fences, singing
-  wires, and footsteps on snow, packed road and floorboards. You also hear
-  the shovel, zombie voices, dogs and stove crackle. A TV mumbles through a
-  wall. Sounds carry with the wind and are muffled by walls.
+  between your left and right ear, howling at corners and fences, and
+  singing wires. A footstep is a shower of tiny snow fractures, denser under
+  the heel than under the toe: a soft crunch on loose snow, a frosty squeak
+  on the packed road, felt boots on floorboards, where some boards always
+  creak. Dogs, the chained dog's growl and roosters come from a small voice
+  model: vocal-fold pulses with jitter and subharmonics, breath noise and
+  four moving mouth formants, with pitch contours measured from recordings.
+  Every village dog keeps its own yard and voice for the night, and barks
+  echo off the forest. Roosters crow at midnight, at two and before dawn,
+  answering each other. The stove flickers and crackles in bursts, a TV
+  mumbles through a wall. Sounds carry with the wind and are muffled by
+  walls; the reverb is an 8-line feedback delay network.
 
 **Controls**
 
@@ -126,7 +134,7 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | `--shot1` … `--shot9`, `--shot0` | `build/shotN.bmp` (the 640×360 frame) and `build/viewN.bmp` (scaled to 1920×1080 with the HUD): night, dusk, inside an izba, walk, fight, death, yard, flashlight, dawn, behind a house |
 | `--shotw`, `--shotb`, `--shotz` | wind at 21:40, a blizzard, the scent test (`zlog.bin`) |
 | `--wav` (with a shot) | also records the scene's sound to `shotN.wav` |
-| `--sndtest` | every sound event and ambience in a row → `sndtest.wav` |
+| `--sndtest` | every sound event and ambience in a row, then a distant dog and rooster → `sndtest.wav` |
 | `--hb`, `--lm`, `--wind`, `--soak` | hitboxes, baked lamp light, wind field from above, 3000-frame soak |
 | `--fs`, `--alog` | start fullscreen; log audio buffer underruns to `alog.bin` |
 | `--intro` (with a shot) | draws the title overlay over the shot |
@@ -147,8 +155,8 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~38 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 460 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~40 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 480 КБ.
 
 **Что внутри**
 
@@ -206,9 +214,15 @@ runs `--bench` and prints min / median / p90 for every pass.
   замерзаешь.
 - **Синтезированный звук.** Поток на waveOut в реальном времени смешивает всё
   из фильтров и генераторов, без сэмплов. Ветер в левом и правом ухе разный,
-  воет на углах и заборах, гудят провода. Шаги звучат по-своему на снегу,
-  укатанной дороге и половицах. Ещё слышно лопату, голоса зомби, собак, треск
-  печки и телевизор за стеной. Звуки несёт ветром и глушат стены.
+  воет на углах и заборах, гудят провода. Шаг — россыпь мелких изломов снега,
+  под пяткой гуще, чем под носком: мягкий хруст по рыхлому, морозный скрип по
+  укатанной дороге, валенки по половицам, и некоторые доски всегда скрипят.
+  Собак, рык цепного пса и петухов даёт маленькая модель голоса: толчки связок
+  с дрожью и подгармоникой, шум дыхания и четыре подвижные форманты пасти,
+  высота снята с записей. У каждой собаки на всю ночь свой двор и голос, лай
+  отдаётся эхом от леса. Петухи поют в полночь, в два и перед рассветом и
+  перекликаются. Печь трепещет и трещит вспышками, телевизор бубнит за стеной.
+  Звуки несёт ветром и глушат стены, реверберация — сеть из 8 задержек.
 
 **Управление:** WASD — идти, Shift — бежать, ЛКМ/Пробел — лопата, F — фонарь,
 E — взять или обыскать, 1–4 — батарейки, бинт, чай, еда из запаса, M — звук,
