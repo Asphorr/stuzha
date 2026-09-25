@@ -475,8 +475,10 @@ bench_run:
     mov     [prof_acc + 8*8], rax
     mov     rax, [pr_ticks]             ; 10 — надписи и вывод прошлого кадра (в потоке)
     mov     [prof_acc + 10*8], rax
-    mov     rax, [sky_ticks]            ; 18 — фоновая развёртка теней (рядом с объектами)
+    mov     rax, [sky_ticks]            ; 18 — развёртка теней (тем же заданием, что полосы)
     mov     [prof_acc + 18*8], rax
+    mov     rax, [band_tmax]            ; 4 — самая долгая полоса объектов и крыш
+    mov     [prof_acc + 4*8], rax
     mov     rax, [qpc_end]              ; 11 — весь кадр, от update до передачи
     sub     rax, [qpc_now]
     mov     [prof_acc + 11*8], rax
@@ -1786,8 +1788,9 @@ draw_text:
 %include "roof.inc"
 %include "snow.inc"
 %include "post.inc"
-%include "lightx.inc"
 %include "lights.inc"
+%include "lightx.inc"                   ; после lights.inc: dl_row8 берёт его AL_*, константы
 %include "pool.inc"
 %include "audio.inc"
 %include "data.inc"
+%include "bands.inc"                    ; последним: имена копий полос остаются определены

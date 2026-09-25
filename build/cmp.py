@@ -1,7 +1,8 @@
 # Сверка снимков до байта: перед переделкой — `python build/cmp.py save` (эталон
 # текущей сборкой в build/ref/), после — `python build/cmp.py [1,b,1i,...]`.
 # «i» в конце — с --intro (заставка поверх). Цифры «кадр N мс» не сравниваются.
-# Ключи: --noavx, --threads N — передаются игре; --rgb — без четвёртого байта.
+# Ключи: --noavx, --threads N — передаются игре; --rgb — без четвёртого байта;
+# --exe X — снимать не stuzha.exe, а build/X (эталон старой сборкой).
 import os, sys, subprocess
 import numpy as np
 
@@ -9,13 +10,14 @@ BLD = os.path.dirname(os.path.abspath(__file__))
 REF = os.path.join(BLD, "ref")
 SHOTS = list("1234567890wbz") + ["1i", "bi", "6i"]
 MX0, MX1, MY0, MY1 = 520, 600, 22, 38          # «кадр N мс» справа вверху
+EXE = sys.argv[sys.argv.index("--exe") + 1] if "--exe" in sys.argv else "stuzha.exe"
 
 def load(p):
     b = open(p, "rb").read()
     return np.frombuffer(b[54:], dtype=np.uint8).reshape(360, 640, 4)[::-1]
 
 def shoot(s, extra):
-    cmd = [os.path.join(BLD, "stuzha.exe"), "--shot" + s[0]] + (["--intro"] if s.endswith("i") else []) + extra
+    cmd = [os.path.join(BLD, EXE), "--shot" + s[0]] + (["--intro"] if s.endswith("i") else []) + extra
     subprocess.run(cmd, cwd=BLD, check=True)
     return os.path.join(BLD, f"shot{s[0]}.bmp")
 
@@ -25,7 +27,8 @@ def main():
     if "--noavx" in args: extra.append("--noavx")
     if "--threads" in args: extra += ["--threads", args[args.index("--threads") + 1]]
     rgb = "--rgb" in args
-    pos = [a for a in args if not a.startswith("--") and not a.isdigit()]
+    pos = [a for i, a in enumerate(args) if not a.startswith("--") and not a.isdigit()
+           and not (i and args[i - 1] == "--exe")]
     if pos and pos[0] == "save":
         os.makedirs(REF, exist_ok=True)
         for s in SHOTS:

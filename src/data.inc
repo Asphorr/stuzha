@@ -890,7 +890,6 @@ sp_len:     dd 0
 sm_s:       dd 0.0                      ; ветер над трубой
 dw_wx:      dd 0.0                      ; провод: ветер
 dw_wy:      dd 0.0
-sw_vs:      dd 0.0                      ; дерево: ветер вбок по экрану
 gs_u0:      dd 0.0                      ; gen_streaks
 gs_v0:      dd 0.0
 gs_w:       dd 0.0
@@ -950,14 +949,7 @@ cl_oy:      dd 0
 sky_b:      dd 0
 sky_wrap:   dd 0.1                      ; «обёртка» N·L: луна узкая, зарево широкое
 flk_moon:   dd 0
-sh_n:       dd 0                        ; нормаль пикселя грани (shade_side)
-di_t1:      dd 0
-di_t2:      dd 0
-cm_n0:      dd 0
-cm_t1:      dd 0
-cm_t2:      dd 0
 sw_sgn:     dd 1
-sw_g:       dd 0.0
 ; тени луны
 align 16, db 0
 mk_k:       dd 0.0                      ; рост полутени луны на px пути
@@ -984,11 +976,6 @@ breath_add: dd 0x00404040
 bb_lines:   dd 0
 ; заслонители фонарика
 nocc:       dd 0
-; спрайты
-img_sway:   dd 0
-img_mode:   dd 0
-img_anchor: dd 0
-img_nb:     dd N_BL                     ; нормали картинки: N_BL / N_SM / N_SB
 ; развёртка теней луны
 align 8, db 0
 sw_hb:      dq 0                        ; карта высот в начале окна
@@ -1002,9 +989,6 @@ sw_op:      dd 0
 sw_ca:      dd 0                        ; по облакам (mzg) вдоль, на сэмпл, байты
 sw_v0:      dd 0                        ; строки развёртки, которые на окно влияют
 sw_v1:      dd 0
-bk_dith:    dd 0
-cm_snow:    dd 0
-cm_seed:    dd 0
 ; генерация
 nl_kind:    dd 0
 lamp_line:  dd 0
@@ -1033,75 +1017,7 @@ dw_sw:      dd 0.0
 dw_px:      dd 0.0
 dw_py:      dd 0.0
 dw_dt:      dd 0.0
-tmp_d:      dd 0.0
-; проход крыш
-rq_x:       dd 0.0, 0.0, 0.0, 0.0      ; углы на экране (за rq_x сразу rq_y)
-rq_y:       dd 0.0, 0.0, 0.0, 0.0
-rq_s0:      dd 0.0
-rq_sa:      dd 0.0
-rq_sb:      dd 0.0
-rq_n0:      dd 0
-rq_n:       dd 0
-rq_gp:      dd 0
-rq_vis:     dd 0
-rq_fade:    dd 16
-rq_dpl:     dd 0
-rq_r1:      dd 0
-rq_c1:      dd 0
-rq_face:    dd 0
-rq_ax:      dd 0
-rf_u0:      dd 0.0
-rf_u1:      dd 0.0
-rf_ug:      dd 0.0
-rf_uv:      dd 0.0
-rf_v0:      dd 0.0
-rf_v1:      dd 0.0
-rf_vm:      dd 0.0
-rf_k:       dd 0.0
-rf_zr:      dd 0.0
-rf_ze:      dd 0.0
-ri_U0:      dd 0
-ri_U1:      dd 0
-ri_V0:      dd 0
-ri_V1:      dd 0
-ri_Vm:      dd 0
-ri_hs:      dd 0
-ri_P:       dd 0
-ri_uc:      dd 0
-ri_vc:      dd 0
-ri_zt:      dd 0
-ri_zr:      dd 0
-ri_ze:      dd 0
-ri_fl:      dd 0
-ri_seed:    dd 0
-ri_mat:     dd 0
-ri_gab:     dd 0
-ri_barge:   dd 0
-rn_f:       dd 0
-rn_b:       dd 0
-rn_g:       dd 0
-rn_a:       dd 0
-rt_a:       dd 0.0
-rt_b:       dd 0.0
-rt_c:       dd 0.0
-rt_d:       dd 0.0
-rt_e:       dd 0.0
-rt_f:       dd 0.0
-la_u0:      dd 0.0
-la_v0:      dd 0.0
-la_z0:      dd 0.0
-la_u1:      dd 0.0
-la_v1:      dd 0.0
-la_z1:      dd 0.0
-la_col:     dd 0
-ra_g:       dd 0.0
-ra_s:       dd 0.0
-ra_u:       dd 0.0
-ra_t:       dd 0.0
-rq_occ:     dd 0
-rq_occn:    dd 0
 align 8, db 0
-rq_sh:      dq 0
 prof_now:   dq 0                        ; замеры проходов рендера
 prof_last:  dq 0
 prof_acc:   times 24 dq 0
@@ -1130,48 +1046,6 @@ align 8, db 0
 bench_n:    dd 0                        ; заголовок bench.bin: кадров, слотов, частота QPC
             dd BSLOTS
 bench_qpf:  dq 0
-
-; палитра символов персонажей (индекс = ASCII)
-pal:
-%assign i 0
-%rep 128
-  %if i == 'h'
-    dd 0x016B4A2E
-  %elif i == 'H'
-    dd 0x01463020
-  %elif i == 's'
-    dd 0x01E0AE8C
-  %elif i == 'S'
-    dd 0x01B08066
-  %elif i == 'e'
-    dd 0x01201818
-  %elif i == 'a'
-    dd 0x01282220
-  %elif i == 'g'
-    dd 0x019AA88E
-  %elif i == 'G'
-    dd 0x016A7862
-  %elif i == 'x'
-    dd 0x01601010
-  %elif i == 'r'
-    dd 0x01801414
-  %elif i == 'R'
-    dd 0x014A0A0A
-  %elif i == 'w'
-    dd 0x018A6A40
-  %elif i == 'm'
-    dd 0x01A8B0B8
-  %elif i == 'M'
-    dd 0x01687078
-  %elif i == 'k'
-    dd 0x0118181C
-  %elif i == 'L'
-    dd 0x01303036
-  %else
-    dd 0x01FF00FF
-  %endif
-  %assign i i+1
-%endrep
 
 align 8, db 0
 shot_ztab:  dq shot_zoff
@@ -1246,7 +1120,6 @@ plw_y:      dd 0
 pdiag:      dd 0
 psx:        dd 320
 psy:        dd 196
-cmx:        dd 0
 pl_hp:      dd 100.0
 pl_sta:     dd 100.0
 pl_bat:     dd 100.0
@@ -1293,22 +1166,6 @@ H_y:        dd 0
 H_w:        dd 0
 H_h:        dd 0
 H_lit:      dd 0
-bk_kind:    dd 0
-bk_H:       dd 0
-bk_tx:      dd 0
-bk_ty:      dd 0
-bk_sx:      dd 0
-bk_sy:      dd 0
-bk_seed:    dd 0
-bk_cut:     dd 0
-bk_faces:   dd 0
-bk_notop:   dd 0
-col_dh:     dd 0                        ; сугроб у грани в этой колонке, px
-pix_lx:     dd 0
-pix_ly:     dd 0
-col_gpos:   dd 0
-cm_gpos:    dd 0
-cm_dlim:    dd 0x7FFFFFFF               ; фигура не рисуется поверх того, что ближе к глазу
 mv_dx:      dd 0.0
 mv_dy:      dd 0.0
 cp_R:       dd 0.0
@@ -1371,7 +1228,6 @@ spr_spruce: resd 32*64
 spr_birch:  resd 20*56
 spr_lamp:   resd 12*50
 spr_cross:  resd 10*20
-dlist:      resq 304
 logtab:     resb 64
 alignb 4
 lut_log:    resd 257                    ; оттенки бревна и торца (init_blk_lut)

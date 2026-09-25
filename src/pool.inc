@@ -45,6 +45,91 @@ pool_init:
     call    [CreateThread]
     dec     ebx
     jnz     .cr
+    ; и поток фонового задания кадра (bg_go / bg_wait)
+    xor     ecx, ecx
+    xor     edx, edx
+    lea     r8, [bg_thread]
+    xor     r9d, r9d
+    mov     qword [rsp+32], 0
+    mov     qword [rsp+40], 0
+    call    [CreateThread]
+    mov     dword [bg_on], 1
+.out:
+    add     rsp, 48
+    pop     rbx
+    ret
+
+; ---------------------------------------------------------------- фоновое задание
+; Одно задание кадра, которому нужен весь проход, а не строки (развёртка теней луны):
+; bg_go отдаёт его своему потоку и сразу возвращается, bg_wait ждёт конца. Одним
+; потоком (--threads 1) bg_go делает его сразу сам
+bg_thread:
+    push    rbx
+    push    rsi
+    sub     rsp, 40
+    xor     esi, esi                    ; сделано заданий
+.wait:
+    mov     ebx, POOL_SPIN
+.spin:
+    cmp     [bg_req], esi
+    jne     .go
+    pause
+    dec     ebx
+    jnz     .spin
+    mov     [rsp+32], esi
+    lea     rcx, [bg_req]
+    lea     rdx, [rsp+32]
+    mov     r8d, 4
+    mov     r9d, -1
+    call    [WaitOnAddress]
+    jmp     .wait
+.go:
+    inc     esi
+    call    [bg_func]
+    mov     [bg_fin], esi               ; всё записанное заданием — раньше (x86: по порядку)
+    lea     rcx, [bg_fin]
+    call    [WakeByAddressAll]
+    jmp     .wait
+
+; rcx = функция без аргументов
+bg_go:
+    sub     rsp, 40
+    cmp     dword [bg_on], 0
+    jne     .bg
+    call    rcx
+    jmp     .out
+.bg:
+    mov     [bg_func], rcx
+    mov     eax, [bg_req]
+    inc     eax
+    xchg    [bg_req], eax               ; полный барьер
+    lea     rcx, [bg_req]
+    call    [WakeByAddressAll]
+.out:
+    add     rsp, 40
+    ret
+
+bg_wait:
+    push    rbx
+    sub     rsp, 48
+    cmp     dword [bg_on], 0
+    je      .out
+.w:
+    mov     ebx, POOL_SPIN
+.spin:
+    mov     eax, [bg_fin]
+    cmp     eax, [bg_req]
+    je      .out
+    pause
+    dec     ebx
+    jnz     .spin
+    mov     [rsp+32], eax
+    lea     rcx, [bg_fin]
+    lea     rdx, [rsp+32]
+    mov     r8d, 4
+    mov     r9d, -1
+    call    [WaitOnAddress]
+    jmp     .w
 .out:
     add     rsp, 48
     pop     rbx
@@ -179,5 +264,12 @@ pl_chunk:   dd 0
 pl_gen:     dd 0
 pl_n:       dd 1                        ; потоков вместе с главным
 pl_want:    dd 0                        ; --threads N
+align 64, db 0
+bg_req:     dd 0                        ; фоновое задание: отдано заданий
+align 64, db 0
+bg_fin:     dd 0                        ;                  сделано
+align 8, db 0
+bg_func:    dq 0
+bg_on:      dd 0                        ; есть поток (иначе bg_go делает сам)
 
 section .text

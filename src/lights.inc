@@ -12,12 +12,13 @@
 ; снег пятно окна, дальний край — размытее. Печь светит из топки вперёд и дрожит,
 ; телевизор мерцает; фонарик — прожектор из руки. Снег под огнями подсвечивает
 ; стены и фигуры снизу (сетка lgst).
-; Строку считает dl_row (её зовут light_rows и light_rows_x — один код для обоих
-; путей, кадр совпадает до байта) и кладёт в dlb словами B, G, R, 0. После
-; освещения — тоновая кривая tm_lut: пересвет плавно уходит к 255, а не в белое.
+; Строку считает dl_row по 4 пикселя (SSE2, её зовёт light_rows) или dl_row8 по 8
+; (AVX2, lightx.inc, зовёт light_rows_x) — те же операции по дорожкам, кадр совпадает
+; до байта — и кладёт в dlb словами B, G, R, 0. После освещения — тоновая кривая
+; tm_lut: пересвет плавно уходит к 255, а не в белое.
 
 AL_MAX      equ 64                  ; огней на кадр (бит в маске плитки)
-AL_SZ       equ 640
+AL_SZ       equ 864
 AL_X        equ 0                   ; точка огня, мир 8.8 (f32); у окна — середина стекла снаружи
 AL_Y        equ 4
 AL_Z        equ 8                   ; высота, px
@@ -47,29 +48,29 @@ AL_WHID     equ 132                 ; окно: своя изба + 1 (её он
 AL_FIG      equ 136                 ; фигуры рядом: x, y, рамка тени x0, x1, y0, y1 (мир 8.8, f32)
 AL_FSZ      equ 32
 AL_FMAX     equ 6
-; для dl_row — по 4 пикселя: то же, размноженное на 4 дорожки
-AL_XV       equ 336                 ; точка огня
-AL_YV       equ 352
-AL_ZV       equ 368
-AL_IR2V     equ 384                 ; 1 / R² отсечения
-AL_IRAV     equ 400                 ; 1 / R² затухания (у окна — свечения стекла)
-AL_CB       equ 416                 ; цвет
-AL_CG       equ 432
-AL_CR       equ 448
-AL_LDX      equ 464                 ; лепесток: clamp((ось · к огню)/d · k + b)
-AL_LDY      equ 480
-AL_LDZ      equ 496
-AL_LK       equ 512
-AL_LB       equ 528
-AL_HIDV     equ 544                 ; изба
-AL_R2       equ 560                 ; R² отсечения — плиткам
-AL_R2G      equ 564                 ; окно: R² свечения стекла
-AL_EX1      equ 568                 ; окно: клин пятна — от лампочки к краям стекла (8.8)
-AL_EY1      equ 572
-AL_EX2      equ 576
-AL_EY2      equ 580
-AL_ESG      equ 584                 ; знак: край 1 -> край 2 против часовой или по
-AL_HT       equ 592                 ; пороги карты горизонта по сэмплам (адрес), если есть карта
+; для dl_row и dl_row8 — то же, размноженное на 8 дорожек (dl_row берёт первые 4)
+AL_XV       equ 352                 ; точка огня
+AL_YV       equ 384
+AL_ZV       equ 416
+AL_IR2V     equ 448                 ; 1 / R² отсечения
+AL_IRAV     equ 480                 ; 1 / R² затухания (у окна — свечения стекла)
+AL_CB       equ 512                 ; цвет
+AL_CG       equ 544
+AL_CR       equ 576
+AL_LDX      equ 608                 ; лепесток: clamp((ось · к огню)/d · k + b)
+AL_LDY      equ 640
+AL_LDZ      equ 672
+AL_LK       equ 704
+AL_LB       equ 736
+AL_HIDV     equ 768                 ; изба
+AL_R2       equ 800                 ; R² отсечения — плиткам
+AL_R2G      equ 804                 ; окно: R² свечения стекла
+AL_EX1      equ 808                 ; окно: клин пятна — от лампочки к краям стекла (8.8)
+AL_EY1      equ 812
+AL_EX2      equ 816
+AL_EY2      equ 820
+AL_ESG      equ 824                 ; знак: край 1 -> край 2 против часовой или по
+AL_HT       equ 832                 ; пороги карты горизонта по сэмплам (адрес), если есть карта
 
 DT_W        equ SCR_W/16            ; маски огней по плиткам 16x16 px
 DT_H        equ (SCR_H + 15)/16
@@ -162,12 +163,13 @@ WM_H        equ 21                  ;             wh −1..19
     punpckldq %1, xmm6
 %endmacro
 
+; вектор констант: 8 дорожек (dl_row берёт первые 4, dl_row8 — все)
 %macro V4 2
-%1: times 4 dd %2
+%1: times 8 dd %2
 %endmacro
 
 section .rdata
-align 16, db 0
+align 32, db 0
 V4 lt_pxu4, 0.0766
 V4 lt_one4, 1.0
 V4 lt_zero4, 0.0
@@ -234,9 +236,10 @@ V4 lt_hx, 0x27d4eb2d                    ; множители HASH
 V4 lt_hy, 0x165667b1
 V4 lt_hm, 0x2c1b3c6d
 V4 lt_2_1v, 2.1
+V4 lt_absm, 0x7FFFFFFF
+lt_w256:    times 16 dw 256
 w_lmax:     dw 1023, 1023, 1023, 255, 1023, 1023, 1023, 255
 w_2047:     times 8 dw 2047
-lt_w256:    times 8 dw 256
 col_fire:   dd 26.0, 96.0, 235.0, 0.0           ; топка: B, G, R
 lt_projk:   dd 4.0, 4.0, 4.0, 0.0               ; сила пятна окна (у самой рамы)
 lt_projtv:  dd 2.0, 2.0, 2.0, 0.0               ; и телевизора в нём
@@ -1425,37 +1428,46 @@ dl_frame:
 .pc:
     movaps  [r14 + AL_PCOL], xmm0
 .nowin:
-    ; ----- для dl_row: размножить на 4 дорожки
+    ; ----- для dl_row и dl_row8: размножить на 8 дорожек
     movss   xmm0, [r14 + AL_X]
     shufps  xmm0, xmm0, 0
     movaps  [r14 + AL_XV], xmm0
+    movaps  [r14 + AL_XV + 16], xmm0
     movss   xmm0, [r14 + AL_Y]
     shufps  xmm0, xmm0, 0
     movaps  [r14 + AL_YV], xmm0
+    movaps  [r14 + AL_YV + 16], xmm0
     movss   xmm0, [r14 + AL_Z]
     shufps  xmm0, xmm0, 0
     movaps  [r14 + AL_ZV], xmm0
+    movaps  [r14 + AL_ZV + 16], xmm0
     movss   xmm0, [r14 + AL_IR2]
     shufps  xmm0, xmm0, 0
     movaps  [r14 + AL_IR2V], xmm0
+    movaps  [r14 + AL_IR2V + 16], xmm0
     cmp     dword [r14 + AL_KIND], LK_WIN
     jne     .ira
     movss   xmm0, [r14 + AL_IRG]
     shufps  xmm0, xmm0, 0
 .ira:
     movaps  [r14 + AL_IRAV], xmm0
+    movaps  [r14 + AL_IRAV + 16], xmm0
     movaps  xmm0, [r14 + AL_COL]
     movaps  xmm1, xmm0
     shufps  xmm1, xmm1, 0x00
     movaps  [r14 + AL_CB], xmm1
+    movaps  [r14 + AL_CB + 16], xmm1
     movaps  xmm1, xmm0
     shufps  xmm1, xmm1, 0x55
     movaps  [r14 + AL_CG], xmm1
+    movaps  [r14 + AL_CG + 16], xmm1
     shufps  xmm0, xmm0, 0xAA
     movaps  [r14 + AL_CR], xmm0
+    movaps  [r14 + AL_CR + 16], xmm0
     movd    xmm0, [r14 + AL_HID]
     pshufd  xmm0, xmm0, 0
     movdqa  [r14 + AL_HIDV], xmm0
+    movdqa  [r14 + AL_HIDV + 16], xmm0
     movss   xmm0, [rsp + 56]
     mulss   xmm0, xmm0
     movss   [r14 + AL_R2], xmm0
@@ -1500,14 +1512,19 @@ dl_frame:
 .lset:
     shufps  xmm0, xmm0, 0
     movaps  [r14 + AL_LDX], xmm0
+    movaps  [r14 + AL_LDX + 16], xmm0
     shufps  xmm1, xmm1, 0
     movaps  [r14 + AL_LDY], xmm1
+    movaps  [r14 + AL_LDY + 16], xmm1
     shufps  xmm2, xmm2, 0
     movaps  [r14 + AL_LDZ], xmm2
+    movaps  [r14 + AL_LDZ + 16], xmm2
     shufps  xmm3, xmm3, 0
     movaps  [r14 + AL_LK], xmm3
+    movaps  [r14 + AL_LK + 16], xmm3
     shufps  xmm4, xmm4, 0
     movaps  [r14 + AL_LB], xmm4
+    movaps  [r14 + AL_LB + 16], xmm4
     ; прямоугольник на экране -> маски плиток
     movss   xmm0, [r14 + AL_X]
     movss   xmm1, [r14 + AL_Y]
@@ -3668,6 +3685,7 @@ hz_half:    dd 0                        ; окно: только снаружи
 section .bss
 alignb 64
 dl_tm:      resq DT_W*DT_H              ; маски огней по плиткам экрана
+alignb 32
 al_buf:     resb AL_MAX*AL_SZ           ; огни кадра
 dl_fg:      resq DL_FGMAX               ; фигуры кадра: x, y
 wm_buf:     resb 3*512                  ; маски рам
