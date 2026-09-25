@@ -660,6 +660,7 @@ update_player:
     movss   xmm1, [mv_x]
     mulss   xmm1, xmm2
     addss   xmm1, [rbx + E_Y]
+    call    snd_foot                    ; звук: нахожено ли тут и глубок ли снег — до оттиска
     mov     ecx, 215
     mov     edx, 2
     call    stamp_track

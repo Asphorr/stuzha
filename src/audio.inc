@@ -3022,11 +3022,55 @@ zpitch:
     ret
 
 ; ---------------------------------------------------------------- крючки в игре
-; шаг игрока: снег — хруст, дорога (укатано, мороз) — скрип, в избе — половицы
+; xmm0 = x, xmm1 = y — куда ляжет след, пока он не оттиснут: есть ли тут уже следы
+; (max в 3x3 ячейках) -> gt_ftr, высота снега (рельеф) -> gt_fdp. xmm0, xmm1 не трогает
+snd_foot:
+    movss   xmm2, xmm0
+    mulss   xmm2, [ac_8]
+    cvttss2si eax, xmm2
+    movss   xmm2, xmm1
+    mulss   xmm2, [ac_8]
+    cvttss2si ecx, xmm2
+    mov     dword [gt_ftr], 0
+    mov     dword [gt_fdp], 0
+    dec     eax
+    dec     ecx
+    cmp     eax, DECW - 3
+    ja      .no
+    cmp     ecx, DECW - 3
+    ja      .no
+    shl     ecx, 10
+    add     ecx, eax                    ; левый верхний угол 3x3
+    lea     rdx, [tracks]
+    xor     eax, eax
+    mov     r8d, 3
+.r:
+    movzx   r9d, byte [rdx + rcx]
+    cmp     r9d, eax
+    cmova   eax, r9d
+    movzx   r9d, byte [rdx + rcx + 1]
+    cmp     r9d, eax
+    cmova   eax, r9d
+    movzx   r9d, byte [rdx + rcx + 2]
+    cmp     r9d, eax
+    cmova   eax, r9d
+    add     ecx, DECW
+    dec     r8d
+    jnz     .r
+    mov     [gt_ftr], eax
+    sub     ecx, DECW*2 - 1             ; середина
+    lea     rdx, [drift]
+    movzx   eax, byte [rdx + rcx*4]
+    mov     [gt_fdp], eax
+.no:
+    ret
+
+; шаг игрока: снег — хруст, дорога (укатано, мороз) — скрип, в избе — половицы. По
+; нахоженному — глуше и тише, по сугробу — глубже, ниже и гуще (snd_foot)
 snd_step_pl:
     cmp     byte [aud_on], 0
     je      .no
-    sub     rsp, 40
+    sub     rsp, 56
     movss   xmm0, [pl + E_X]
     movss   xmm1, [pl + E_Y]
     call    g_room
@@ -3054,13 +3098,53 @@ snd_step_pl:
     movss   xmm2, [ac_1_25]
     mov     dword [gt_a], __float32__(1.5)  ; бегом — чаще и крепче
 .w:
+    movss   xmm3, [ac_1]
+    cmp     dword [rsp + 32], SN_STEP_WOOD
+    je      .pan
+    ; нахожено (tr = след / 215): тише и глуше, реже хрустит; сугроб (глубина
+    ; dp = (высота − 2 px) / 10 px): громче, ниже, гуще
+    cvtsi2ss xmm4, dword [gt_ftr]
+    mulss   xmm4, [ac_i215]
+    minss   xmm4, [ac_1]
+    cvtsi2ss xmm5, dword [gt_fdp]
+    mulss   xmm5, [ac_0_0125]
+    subss   xmm5, [ac_0_2]
+    maxss   xmm5, [ac_0]
+    minss   xmm5, [ac_1]
+    movss   xmm0, [ac_1]
+    movaps  xmm1, xmm4
+    mulss   xmm1, [ac_0_35]
+    subss   xmm0, xmm1
+    movaps  xmm1, xmm5
+    mulss   xmm1, [ac_0_35]
+    addss   xmm1, [ac_1]
+    mulss   xmm0, xmm1
+    mulss   xmm2, xmm0                  ; громкость
+    movss   xmm0, [ac_1]
+    movaps  xmm1, xmm4
+    mulss   xmm1, [ac_0_3]
+    subss   xmm0, xmm1
+    movaps  xmm1, xmm5
+    mulss   xmm1, [ac_0_4]
+    addss   xmm1, [ac_1]
+    mulss   xmm0, xmm1
+    mulss   xmm0, [gt_a]
+    movss   [gt_a], xmm0                ; сила: зёрен больше/меньше
+    movaps  xmm3, xmm4
+    mulss   xmm3, [ac_0_08]
+    addss   xmm3, [ac_1]
+    movaps  xmm1, xmm5
+    mulss   xmm1, [ac_0_2]
+    movss   xmm0, [ac_1]
+    subss   xmm0, xmm1
+    mulss   xmm3, xmm0                  ; высота резонансов
+.pan:
     movss   xmm0, [ac_0_08]             ; левая/правая нога — чуть в стороны
     test    dword [pl + E_FOOT], 1
     jz      .p
     xorps   xmm0, [ac_sign]
 .p:
     movss   [rsp + 36], xmm0
-    movss   xmm3, [ac_1]
     call    snd_emit_c
     ; половица: у каждой доски свой нрав (хеш тайла) — каждая третья скрипит, когда на
     ; неё ступишь, и всегда своим голосом
@@ -3099,7 +3183,7 @@ snd_step_pl:
     movss   xmm3, [rsp + 32]
     call    snd_emit_c
 .out:
-    add     rsp, 40
+    add     rsp, 56
 .no:
     ret
 
@@ -4084,13 +4168,15 @@ az_dogs:
     jmp     .next
 .bark:
     call    g_rndf
-    mulss   xmm0, [ac_5]
+    mulss   xmm0, [ac_6]
     cvttss2si ebx, xmm0
-    add     ebx, 2                      ; 2..6 раз
+    add     ebx, 2                      ; 2..7 раз
     call    g_rndf
-    mulss   xmm0, [ac_0_2]
-    addss   xmm0, [ac_0_3]
-    movss   [gt_t2], xmm0               ; шаг лая этой серии
+    mulss   xmm0, [ac_0_3]
+    addss   xmm0, [ac_0_85]
+    lea     rdx, [fd_t]
+    mulss   xmm0, [rdx + r12*4]
+    movss   [gt_t2], xmm0               ; шаг лая этой серии — от нрава собаки
 .b:
     call    g_rndf
     comiss  xmm0, [ac_0_18]
@@ -4665,6 +4751,17 @@ audio_newgame:
     addss   xmm0, [ac_0_8]
     lea     rdx, [fd_p]
     movss   [rdx + rbx*4], xmm0
+    ; нрав: мелкая (голос выше) тявкает часто, крупная басит реже — 0.35..0.95 с
+    movss   xmm1, [ac_1_25]
+    subss   xmm1, xmm0
+    mulss   xmm1, [ac_1_1]
+    addss   xmm1, [ac_0_3]
+    movss   [rsp + 32], xmm1
+    call    g_rndf
+    mulss   xmm0, [ac_0_15]
+    addss   xmm0, [rsp + 32]
+    lea     rdx, [fd_t]
+    movss   [rdx + rbx*4], xmm0
     call    g_rndf
     addss   xmm0, [ac_0_7]
     lea     rdx, [fd_r]
@@ -5137,7 +5234,8 @@ snd_xk:
     db VK_CALL, CD_HOWL
     db 0, 0, 0, 0                       ; сердце, смерть
     db VK_GRAIN, GD_POP
-    db 0, 0, 0, 0                       ; фонарь, ком снега
+    db 0, 0                             ; фонарь
+    db VK_GRAIN, GD_SPRINKLE            ; ком снега: осыпь
     db VK_CALL, CD_ROO
     db 0, 0                             ; вдох
     db VK_GRAIN, GD_FCREAK
@@ -5363,6 +5461,9 @@ ac_7000:    dd 7000.0
 ac_17000:   dd 17000.0
 ac_1e6:     dd 1000000.0
 ac_i255:    dd 0.003921569
+ac_i215:    dd 0.004651163
+ac_0_0125:  dd 0.0125
+ac_8:       dd 8.0
 ac_sqrt5:   dd 2.2360680
 ac_i1400:   dd 0.000714286
 ac_ln2:     dd 0.69314718
@@ -5559,6 +5660,8 @@ gt_dd:      resd 1
 gt_dp:      resd 1
 gt_bprev:   resd 1
 gt_gs:      resd 1
+gt_ftr:     resd 1                      ; snd_foot: след уже есть (0..255), высота снега
+gt_fdp:     resd 1
 gt_seed:    resd 1                      ; для snd_emit: зерно голоса (сбрасывается)
 gt_a:       resd 1                      ;   сила/хрипота (сбрасывается)
 dog_t:      resd 1
@@ -5570,6 +5673,7 @@ fd_x:       resd NFD                    ; двор, голос (высота), �
 fd_y:       resd NFD
 fd_p:       resd NFD
 fd_r:       resd NFD
+fd_t:       resd NFD                    ; шаг лая
 ro_x:       resd NRO
 ro_y:       resd NRO
 ro_p:       resd NRO
