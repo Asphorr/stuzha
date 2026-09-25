@@ -351,15 +351,6 @@ LK_STOVE    equ 5                   ; топка печи: только свет
     minss   %1, [f_1]
 %endmacro
 
-; строка спрайта-карты символов: ровно SPRW символов
-%macro R 1
-    %strlen %%l %1
-    %if %%l != SPRW
-        %error "sprite row length mismatch"
-    %endif
-    db %1
-%endmacro
-
 ; импорт: call [Имя] -> call [__imp_Имя]
 %macro IMPORT 1-*
   %rep %0

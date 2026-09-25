@@ -21,15 +21,15 @@ NBANDS      equ 4
 %endmacro
 
 BAND_NAMES draw_objects, draw_tile, draw_block, shade_top, shade_side, draw_img, \
-    draw_cmap, blob, draw_entity, \
+    blob, draw_entity, \
     rq_plane, rq_planel, rq_corner, rq_cornl, rq_fill, rq_line, draw_roofs, \
     roof_setup, roof_draw, roof_antenna, col_mul, roof_mat, sh_slope, sh_gable, \
     sh_verge, sh_towel, sh_fascia, sh_chim, sh_horse, band_draw, \
     band_y0, band_y1, band_h, band_occ, band_t0, band_t1, di_r1, \
     bk_kind, bk_H, bk_tx, bk_ty, bk_sx, bk_sy, bk_seed, bk_cut, bk_faces, bk_notop, \
     bk_dith, col_dh, col_gpos, pix_lx, pix_ly, sh_n, di_t1, di_t2, \
-    cm_gpos, cm_dlim, cm_n0, cm_t1, cm_t2, cm_snow, cm_seed, \
-    img_sway, img_mode, img_anchor, img_nb, sw_g, sw_vs, tmp_d, cmx, pal, dlist, \
+    cm_gpos, cm_dlim, \
+    img_sway, img_mode, img_anchor, img_nb, sw_g, sw_vs, cmx, dlist, \
     rq_x, rq_y, rq_s0, rq_sa, rq_sb, rq_n0, rq_n, rq_gp, rq_vis, rq_fade, rq_dpl, \
     rq_r1, rq_c1, rq_face, rq_ax, rq_occ, rq_occn, rq_sh, \
     rf_u0, rf_u1, rf_ug, rf_uv, rf_v0, rf_v1, rf_vm, rf_k, rf_zr, rf_ze, \
@@ -43,7 +43,9 @@ BAND_NAMES draw_objects, draw_tile, draw_block, shade_top, shade_side, draw_img,
     bx_x0, bx_y0, bx_x1, bx_y1, bx_z0, bx_h, bx_zt, bx_fc, bx_sh, bx_px, bx_py, bx_u, \
     bx_face, bx_gp, fo_hp, fo_sh, fo_fl, fo_d, fo_box, fo_z0, fo_h, fo_wood, fo_col, \
     fo_pal, fo_wx, fo_wy, fo_scr, fo_flen, fo_slen, \
-    draw_veg, vd_rs, vd_fl, vd_dith, vd_x0, vd_y0, vd_y
+    draw_veg, vd_rs, vd_fl, vd_dith, vd_x0, vd_y0, vd_y, \
+    draw_fig, fd_color, fd_rec, fd_sx, fd_sy, fd_gx, fd_gy, fd_iv, fd_iu, fd_ln, fd_list, \
+    fd_oxr, fd_ozr, fd_nx, fd_ny, fd_nz, fd_px, fd_py, fd_pz, fd_pix
 
 %assign BI 0
 %rep NBANDS
@@ -51,6 +53,7 @@ section .text
 %include "objects.inc"
 %include "furn.inc"
 %include "vegdraw.inc"
+%include "figdraw.inc"
 %include "roofdraw.inc"
 
 ; ecx = первая строка полосы, edx = за последней: объекты, потом крыши над ними
@@ -134,26 +137,39 @@ vd_dith:    dd 0
 vd_x0:      dd 0
 vd_y0:      dd 0
 vd_y:       dd 0
+; фигуры (figdraw.inc)
+fd_sx:      dd 0
+fd_sy:      dd 0
+fd_gx:      dd 0
+fd_gy:      dd 0
+fd_iv:      dd 0
+fd_iu:      dd 0
+fd_ln:      dd 0
+fd_pix:     dd 0
+fd_oxr:     dd 0.0
+fd_ozr:     dd 0.0
+fd_nx:      dd 0.0
+fd_ny:      dd 0.0
+fd_nz:      dd 0.0
+fd_px:      dd 0.0
+fd_py:      dd 0.0
+fd_pz:      dd 0.0
+fd_list:    times 32 db 0
 align 8, db 0
 vd_rs:      dq 0
+fd_rec:     dq 0
 bx_sh:      dq 0
 fo_hp:      dq 0
 fo_sh:      dq 0
 ; фигуры и картинки
 cm_gpos:    dd 0
-cm_dlim:    dd 0x7FFFFFFF               ; фигура не рисуется поверх того, что ближе к глазу
-cm_n0:      dd 0
-cm_t1:      dd 0
-cm_t2:      dd 0
-cm_snow:    dd 0
-cm_seed:    dd 0
+cm_dlim:    dd 0x7FFFFFFF               ; тень под ногами — не на то, что ближе к глазу
 img_sway:   dd 0
 img_mode:   dd 0
 img_anchor: dd 0
 img_nb:     dd N_BL                     ; нормали картинки: N_BL / N_SM / N_SB
 sw_g:       dd 0.0
 sw_vs:      dd 0.0                      ; дерево: ветер вбок по экрану
-tmp_d:      dd 0.0
 cmx:        dd 0
 ; проход крыш
 rq_x:       dd 0.0, 0.0, 0.0, 0.0      ; углы на экране (за rq_x сразу rq_y)
@@ -223,48 +239,6 @@ rq_occ:     dd 0
 rq_occn:    dd 0
 align 8, db 0
 rq_sh:      dq 0
-; палитра символов персонажей (индекс = ASCII); фигуры перекрашивают свои цвета
-pal:
-%assign i 0
-%rep 128
-  %if i == 'h'
-    dd 0x016B4A2E
-  %elif i == 'H'
-    dd 0x01463020
-  %elif i == 's'
-    dd 0x01E0AE8C
-  %elif i == 'S'
-    dd 0x01B08066
-  %elif i == 'e'
-    dd 0x01201818
-  %elif i == 'a'
-    dd 0x01282220
-  %elif i == 'g'
-    dd 0x019AA88E
-  %elif i == 'G'
-    dd 0x016A7862
-  %elif i == 'x'
-    dd 0x01601010
-  %elif i == 'r'
-    dd 0x01801414
-  %elif i == 'R'
-    dd 0x014A0A0A
-  %elif i == 'w'
-    dd 0x018A6A40
-  %elif i == 'm'
-    dd 0x01A8B0B8
-  %elif i == 'M'
-    dd 0x01687078
-  %elif i == 'k'
-    dd 0x0118181C
-  %elif i == 'L'
-    dd 0x01303036
-  %else
-    dd 0x01FF00FF
-  %endif
-  %assign i i+1
-%endrep
-
 section .bss
 alignb 8
 dlist:      resq 304                    ; фигуры кадра: ключ x+y, индекс

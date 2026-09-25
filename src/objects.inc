@@ -1727,144 +1727,6 @@ draw_img:
     pop     rbx
     ret
 
-; rcx = карта символов, edx = x0, r8d = y0, r9d = w | h<<8 | flip<<16; цвета из pal
-draw_cmap:
-    push    rbx
-    push    rsi
-    push    rdi
-    push    r12
-    push    r13
-    push    r14
-    push    r15
-    push    rbp
-    mov     rsi, rcx
-    mov     r12d, edx
-    mov     r13d, r8d
-    movzx   r14d, r9b
-    mov     r15d, r9d
-    shr     r15d, 8
-    and     r15d, 255
-    mov     ebp, r9d
-    shr     ebp, 16
-    lea     rbx, [pal]
-    lea     rdi, [albedo]
-    ; стоящий — объёмный по третям, лежащий (24 px) — смотрит в небо
-    mov     dword [cm_n0], N_BL
-    imul    eax, r14d, 85
-    shr     eax, 8
-    mov     [cm_t1], eax
-    imul    eax, r14d, 171
-    shr     eax, 8
-    mov     [cm_t2], eax
-    cmp     r14d, 24
-    jne     .nf0
-    mov     dword [cm_n0], N_UP
-    mov     dword [cm_t1], 255
-    mov     dword [cm_t2], 255
-.nf0:
-    ; строки в полосе: от max(0, y0 − y) до min(h, y1 − y)
-    mov     eax, [band_y1]
-    sub     eax, r13d
-    cmp     r15d, eax
-    cmovg   r15d, eax
-    mov     r10d, [band_y0]
-    sub     r10d, r13d
-    xor     eax, eax
-    cmp     r10d, eax
-    cmovl   r10d, eax
-.r:
-    cmp     r10d, r15d
-    jge     .done
-    mov     eax, r13d
-    add     eax, r10d
-    imul    r11d, eax, SCR_W
-    xor     ecx, ecx
-.c:
-    cmp     ecx, r14d
-    jge     .nr
-    mov     edx, ecx
-    test    ebp, ebp
-    jz      .nf
-    mov     edx, r14d
-    dec     edx
-    sub     edx, ecx
-.nf:
-    mov     eax, r10d
-    imul    eax, r14d
-    add     eax, edx
-    movzx   eax, byte [rsi + rax]
-    cmp     eax, '.'
-    je      .nc
-    and     eax, 127
-    mov     eax, [rbx + rax*4]
-    ; снег: на открытых сверху пикселях чаще, внутри — изредка
-    cmp     dword [cm_snow], 0
-    je      .put
-    imul    r8d, r10d, 31
-    add     r8d, edx
-    add     r8d, [cm_seed]
-    imul    r8d, r8d, 0x9E3779B1
-    shr     r8d, 24
-    test    r10d, r10d
-    jz      .top
-    lea     r9d, [r10d - 1]
-    imul    r9d, r14d
-    add     r9d, edx
-    cmp     byte [rsi + r9], '.'
-    jne     .inner
-.top:
-    cmp     r8d, [cm_snow]
-    jae     .put
-    mov     eax, 0x41E4EAF2
-    jmp     .put
-.inner:
-    shl     r8d, 2
-    cmp     r8d, [cm_snow]
-    jae     .put
-    mov     eax, 0x01D0D8E2
-.put:
-    mov     edx, r12d
-    add     edx, ecx
-    cmp     edx, SCR_W
-    jae     .nc
-    add     edx, r11d
-    mov     r9d, [rdi + rdx*4 + (gposb - albedo)]
-    movzx   r8d, r9w
-    shr     r9d, 16
-    add     r9d, r8d
-    cmp     r9d, [cm_dlim]
-    jg      .nc
-    mov     [rdi + rdx*4], eax
-    mov     eax, [cm_gpos]
-    lea     r8, [gposb]
-    mov     [r8 + rdx*4], eax
-    mov     eax, [cm_n0]
-    cmp     ecx, [cm_t1]
-    jb      .nw
-    inc     eax
-    cmp     ecx, [cm_t2]
-    jb      .nw
-    inc     eax
-.nw:
-    lea     r8, [nbuf]
-    mov     [r8 + rdx], al
-.nc:
-    inc     ecx
-    jmp     .c
-.nr:
-    inc     r10d
-    jmp     .r
-.done:
-    pop     rbp
-    pop     r15
-    pop     r14
-    pop     r13
-    pop     r12
-    pop     rdi
-    pop     rsi
-    pop     rbx
-    ret
-
 ; ecx = sx, edx = sy — тень-клякса под ногами
 blob:
     push    rbx
@@ -1984,190 +1846,38 @@ draw_entity:
     jl      .out
     cmp     edi, SCR_H + 30
     jg      .out
-    ; разворот по экрану
-    xor     ebp, ebp
-    movss   xmm0, [rbx + E_FX]
-    subss   xmm0, [rbx + E_FY]
-    comiss  xmm0, [f_0]
-    jae     .nflip
-    mov     ebp, 1
-.nflip:
-    shl     ebp, 16
-    lea     r8, [pal]
+    ; фигура — капсулами: позу и одежду готовит fig_prep (fig.inc), рисует лучом
+    ; draw_fig (figdraw.inc); у стоящих — пятно тени под ногами
+    mov     eax, r14d
     test    r15d, r15d
-    jz      .zpal
-    mov     dword [r8 + 'c'*4], 0x013E4A34
-    mov     dword [r8 + 'C'*4], 0x012A3424
-    mov     dword [r8 + 'p'*4], 0x012A2A30
-    mov     dword [r8 + 'b'*4], 0x015C5C62
-    mov     dword [r8 + 'B'*4], 0x01404046
-    ; фонарик в руке: включён — светится стекло
-    mov     dword [r8 + 'L'*4], 0x01303036
-    cmp     dword [pl_flash], 0
-    je      .nl
-    mov     dword [r8 + 'L'*4], 0xC1FFF2DC
-.nl:
-    mov     dword [cm_snow], 0          ; живой — снег на нём тает
+    jz      .fs
+    mov     eax, MAXE
+.fs:
+    imul    eax, eax, FG_SZ
+    lea     rdx, [figs]
+    add     rdx, rax
+    cmp     dword [rdx + FG_N], 0
+    je      .out
+    mov     [fd_rec], rdx
+    mov     [fd_sx], esi
+    mov     [fd_sy], edi
+    mov     [fd_gx], r12d
+    mov     [fd_gy], r13d
+    test    r15d, r15d
+    jz      .fz
     cmp     dword [gstate], 1
-    je      .corpse
-    jmp     .frames
-.zpal:
-    mov     eax, [rbx + E_COAT]
-    or      eax, 0x01000000
-    mov     [r8 + 'c'*4], eax
-    mov     ecx, eax
-    shr     ecx, 1
-    and     ecx, 0x7F7F7F
-    mov     edx, eax
-    shr     edx, 3
-    and     edx, 0x1F1F1F
-    add     ecx, edx
-    or      ecx, 0x01000000
-    mov     [r8 + 'C'*4], ecx
-    mov     eax, [rbx + E_PANTS]
-    or      eax, 0x01000000
-    mov     [r8 + 'p'*4], eax
-    mov     dword [r8 + 'b'*4], 0x013A2E26
-    mov     dword [r8 + 'B'*4], 0x01241C16
-    ; мёртвые не греют — снег лежит на плечах
-    mov     dword [cm_snow], 64
-    imul    eax, r14d, 37
-    mov     [cm_seed], eax
-    ; глаза отсвечивают в луче фонарика, если зомби смотрит на игрока
-    mov     dword [r8 + 'x'*4], 0x01601010
-    cmp     dword [pl_flash], 0
-    je      .noeye
-    movss   xmm0, [flash_i]
-    comiss  xmm0, [f_40]
-    jb      .noeye
-    movss   xmm1, [rbx + E_X]
-    subss   xmm1, [pl + E_X]
-    movss   xmm2, [rbx + E_Y]
-    subss   xmm2, [pl + E_Y]
-    movaps  xmm3, xmm1
-    mulss   xmm3, xmm1
-    movaps  xmm4, xmm2
-    mulss   xmm4, xmm2
-    addss   xmm3, xmm4
-    comiss  xmm3, [f_196]
-    jae     .noeye
-    comiss  xmm3, [f_0_3]
-    jb      .noeye
-    sqrtss  xmm3, xmm3
-    divss   xmm1, xmm3
-    divss   xmm2, xmm3
-    movaps  xmm4, xmm1
-    mulss   xmm4, [pl + E_FX]
-    movaps  xmm5, xmm2
-    mulss   xmm5, [pl + E_FY]
-    addss   xmm4, xmm5
-    comiss  xmm4, [f_0_88]
-    jb      .noeye
-    mulss   xmm1, [rbx + E_FX]
-    mulss   xmm2, [rbx + E_FY]
-    addss   xmm1, xmm2
-    comiss  xmm1, [f_m0_3]
-    ja      .noeye
-    mov     dword [r8 + 'x'*4], 0xC1B4F0C8
-.noeye:
+    je      .fd
+    jmp     .fb
+.fz:
     cmp     dword [rbx + E_ST], ST_CORPSE
-    jne     .frames
-.corpse:
-    ; тело понемногу заносит снегом
-    movss   xmm0, [rbx + E_TM]
-    mulss   xmm0, [f_1_7]
-    addss   xmm0, [f_20]
-    minss   xmm0, [f_210]
-    cvttss2si eax, xmm0
-    mov     [cm_snow], eax
-    imul    eax, r14d, 37
-    mov     [cm_seed], eax
-    lea     rcx, [cm_corpse]
-    lea     edx, [esi - 12]
-    lea     r8d, [edi - 6]
-    mov     r9d, 24 | (8 << 8)
-    or      r9d, ebp
-    call    draw_cmap
-    jmp     .out
-.frames:
+    je      .fd
+.fb:
     mov     ecx, esi
     mov     edx, edi
     call    blob
-    ; зомби шатает (на ходу и стоя), игрок чуть подпрыгивает на шаге
-    xor     r12d, r12d
-    xor     r13d, r13d
-    test    r15d, r15d
-    jnz     .pbob
-    movss   xmm0, [rbx + E_AN]
-    mulss   xmm0, [f_7]
-    cvtsi2ss xmm1, r14d
-    addss   xmm0, xmm1
-    call    fsin
-    movss   [tmp_d], xmm0
-    movss   xmm0, [wind_t]
-    mulss   xmm0, [f_1_1]
-    cvtsi2ss xmm1, r14d
-    mulss   xmm1, [f_0_7]
-    addss   xmm0, xmm1
-    call    fsin
-    mulss   xmm0, [f_0_6]
-    addss   xmm0, [tmp_d]
-    maxss   xmm0, [f_m1]
-    minss   xmm0, [f_1]
-    cvtss2si r12d, xmm0
-    jmp     .up0
-.pbob:
-    cmp     dword [pl_moving], 0
-    je      .up0
-    movss   xmm0, [rbx + E_AN]
-    mulss   xmm0, [f_2_6]
-    cvttss2si eax, xmm0
-    and     eax, 1
-    mov     r13d, eax
-.up0:
-    ; верх
-    lea     rcx, [cm_zup]
-    test    r15d, r15d
-    jz      .up
-    lea     rcx, [cm_pup]
-    movss   xmm0, [pl_swing]
-    comiss  xmm0, [f_0]
-    jbe     .up
-    lea     rcx, [cm_patk]
-.up:
-    lea     edx, [esi - 8]
-    add     edx, r12d
-    lea     r8d, [edi - 27]
-    add     r8d, r13d
-    mov     r9d, 16 | (19 << 8)
-    or      r9d, ebp
-    call    draw_cmap
-    ; ноги (у зомби — снег на ботинках)
-    test    r15d, r15d
-    jnz     .lg0
-    mov     dword [cm_snow], 24
-.lg0:
-    lea     rcx, [cm_lidle]
-    test    r15d, r15d
-    jz      .walk
-    cmp     dword [pl_moving], 0
-    je      .legs
-.walk:
-    movss   xmm0, [rbx + E_AN]
-    mulss   xmm0, [f_2_6]
-    cvttss2si eax, xmm0
-    lea     rcx, [cm_la]
-    test    eax, 1
-    jz      .legs
-    lea     rcx, [cm_lb]
-.legs:
-    lea     edx, [esi - 8]
-    lea     r8d, [edi - 8]
-    mov     r9d, 16 | (9 << 8)
-    or      r9d, ebp
-    call    draw_cmap
+.fd:
+    call    draw_fig
 .out:
-    mov     dword [cm_snow], 0
     add     rsp, 40
     pop     rbp
     pop     r15

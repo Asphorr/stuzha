@@ -36,6 +36,7 @@ render:
     call    floor_pass
     call    ifloor_pass                 ; крашеные доски и половики в избах без крыши
     PROF    2
+    call    fig_prep                    ; позы фигур кадра -> капсулы (fig.inc)
     ; объекты и крыши (поверх, с тестом глубины) — полосами экрана на всех ядрах
     lea     rcx, [obj_job]
     mov     edx, NBANDS

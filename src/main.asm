@@ -434,6 +434,10 @@ run_shot:
     je      .svv
     call    veg_gallery                 ; --veg: все растения рядами
 .svv:
+    cmp     dword [dbg_figs], 0
+    je      .svf
+    call    fig_gallery                 ; --figs: все фигуры в поворотах
+.svf:
     cmp     dword [dbg_alb], 0
     je      .sva
     mov     rdi, [fbbits]               ; --albedo: цвета G-буфера как есть
@@ -941,6 +945,13 @@ parse_cmdline:
     mov     dword [dbg_veg], 1
     jmp     .next
 .nvg:
+    cmp     word [rax+4], 'f'           ; --figs: в shotN.bmp — фигуры рядами (отладка)
+    jne     .nfg
+    cmp     word [rax+6], 'i'
+    jne     .nfg
+    mov     dword [dbg_figs], 1
+    jmp     .next
+.nfg:
     cmp     word [rax+4], 'a'           ; --albedo: в shotN.bmp — альбедо без света (отладка)
     jne     .nab
     cmp     word [rax+8], 'b'
@@ -1669,5 +1680,6 @@ wput_clock:
 %include "audio.inc"
 %include "asynth.inc"                   ; голоса сложнее слоёв: зов (лай, петух), зёрна (шаги)
 %include "veg.inc"                      ; лес: модели растений -> объёмные картинки
+%include "fig.inc"                      ; люди и зомби: скелет из капсул, позы, одежда
 %include "data.inc"
 %include "bands.inc"                    ; последним: имена копий полос остаются определены
