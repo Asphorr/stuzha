@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, sprites, light, weather and sound are all produced by
-~31k lines of hand-written NASM. The game is a single 350 KB executable.
+~33k lines of hand-written NASM. The game is a single 370 KB executable.
 
 **What's inside**
 
@@ -31,6 +31,11 @@ files. The village, sprites, light, weather and sound are all produced by
   (albedo, normals, world position) with deferred lighting on SSE2. The moon
   casts contact-hardening soft shadows from a height map. There is also a view
   cone that greys out what you cannot see, bloom and a frost overlay.
+- **HUD at window resolution.** The frame is scaled to the window first, and
+  the HUD is drawn on top at full resolution. Text is rasterized for the
+  current scale into a glyph cache, each glyph with a soft shadow. Bars, icons,
+  the night-to-dawn line and the wind compass are anti-aliased shapes computed
+  from their distance to the outline, four pixels at a time.
 - **Per-pixel light.** Street lamps, lit windows, the stove and the TV are
   computed for every pixel: 3D falloff, soft N·L, and shadows from each light's
   horizon map with a penumbra that widens away from the fence or wall casting
@@ -46,8 +51,9 @@ files. The village, sprites, light, weather and sound are all produced by
   and roofs are drawn in horizontal screen bands at once: every band replays
   the same painter's order but writes only its own rows, and the band edges
   follow last frame's timings. The moon shadow sweep runs on a background
-  thread from the start of the frame until the light pass needs it, and HUD
-  text and presenting happen on their own output thread. Lighting and the
+  thread from the start of the frame until the light pass needs it. Scaling
+  to the window, the HUD and presenting happen on their own output thread,
+  while the next frame is being rendered. Lighting and the
   floor have AVX2 paths (8 pixels per step) next to the SSE2 ones. Every path
   produces the same frame down to the byte, which is checked against the
   single-threaded SSE2 build. On an i7-7700 a frame takes about 4.3 ms
@@ -97,18 +103,20 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 
 | Flag | Output |
 |---|---|
-| `--shot1` … `--shot9`, `--shot0` | `build/shotN.bmp`: night, dusk, inside an izba, walk, fight, death, yard, flashlight, dawn, behind a house |
+| `--shot1` … `--shot9`, `--shot0` | `build/shotN.bmp` (the 640×360 frame) and `build/viewN.bmp` (scaled to 1920×1080 with the HUD): night, dusk, inside an izba, walk, fight, death, yard, flashlight, dawn, behind a house |
 | `--shotw`, `--shotb`, `--shotz` | wind at 21:40, a blizzard, the scent test (`zlog.bin`) |
 | `--wav` (with a shot) | also records the scene's sound to `shotN.wav` |
 | `--sndtest` | every sound event and ambience in a row → `sndtest.wav` |
 | `--hb`, `--lm`, `--wind`, `--soak` | hitboxes, baked lamp light, wind field from above, 3000-frame soak |
 | `--fs`, `--alog` | start fullscreen; log audio buffer underruns to `alog.bin` |
 | `--intro` (with a shot) | draws the title overlay over the shot |
+| `--view N` (with a shot) | height of `viewN.bmp` (16:9), 1080 by default |
 | `--bench` (with a shot) | runs the scene in a live window for 600 frames and writes per-pass timings to `bench.bin` |
 | `--threads N`, `--noavx` | limit the render thread pool; use only the SSE2 path |
 
-`build/topng.ps1 -n "1,b"` converts shots to PNG. `build/bench.ps1 -n 1` runs
-`--bench` and prints min / median / p90 for every pass.
+`build/topng.ps1 -n "1,b"` converts shots to PNG (with the HUD). `build/bench.ps1 -n 1`
+runs `--bench` and prints min / median / p90 for every pass.
+`build/cmp.py` compares frames with a saved reference down to the byte.
 
 ## Русский
 
@@ -117,8 +125,8 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, спрайты, свет, погода и звук целиком получаются из ~31 тыс. строк NASM,
-написанных руками. Вся игра — один exe на 350 КБ.
+Село, спрайты, свет, погода и звук целиком получаются из ~33 тыс. строк NASM,
+написанных руками. Вся игра — один exe на 370 КБ.
 
 **Что внутри**
 
@@ -126,6 +134,11 @@ The game can render fixed-seed scenes to files, which is how it was developed:
   нормали, мировые координаты) и отложенное освещение на SSE2. Луна даёт мягкие
   тени по карте высот. Ещё там конус обзора (невидимое — серой памятью), блум и
   иней по краям экрана.
+- **HUD в разрешении окна.** Кадр сперва растягивается под окно, а HUD
+  рисуется поверх в полном разрешении. Буквы растеризуются под текущий масштаб
+  в кэш глифов, у каждой мягкая тень. Полосы, значки, линия ночи до рассвета и
+  компас ветра — сглаженные фигуры по расстоянию до контура, по 4 пикселя за
+  шаг.
 - **Свет попиксельно.** Фонари, окна, печь и телевизор считаются на каждый
   пиксель: затухание в 3D, мягкое N·L и тени по карте горизонта каждого огня,
   с полутенью, что растёт от забора или стены. Люди и зомби тоже отбрасывают
@@ -139,7 +152,8 @@ The game can render fixed-seed scenes to files, which is how it was developed:
   рисуются сразу горизонтальными полосами экрана: каждая полоса проходит тот же
   порядок художника, но пишет только свои строки, а границы полос следуют за
   временем прошлого кадра. Тени луны считаются фоновым потоком с начала кадра до
-  прохода света, надписи и вывод в окно — в своём потоке. У освещения и пола
+  прохода света. Растяжка под окно, HUD и вывод идут в своём потоке, пока
+  считается следующий кадр. У освещения и пола
   есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
   же кадр до байта, это сверяется с однопоточной SSE2-сборкой. На i7-7700 кадр
   занимает около 4,3 мс (около 230 fps).
@@ -166,7 +180,8 @@ R — заново, Esc — выход.
 в `PATH` или в WSL. Команда `sh build.sh` собирает `build/stuzha.exe`.
 
 **Проверка без игры:** флаги `--shotN`, `--wav`, `--sndtest` и остальные из
-таблицы выше пишут снимки сцен и их звук в файлы. Так игра и разрабатывалась.
+таблицы выше пишут снимки сцен и их звук в файлы: кадр 640×360 — в `shotN.bmp`,
+он же растянутый с HUD — в `viewN.bmp`. Так игра и разрабатывалась.
 `--bench` с `build/bench.ps1` меряют каждый проход кадра, `--threads N` и `--noavx`
 ограничивают потоки и отключают AVX2.
 

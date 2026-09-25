@@ -303,7 +303,8 @@ IMPORT SetProcessDPIAware, RegisterClassExW, CreateWindowExW, PeekMessageW, Tran
 IMPORT DispatchMessageW, DefWindowProcW, PostQuitMessage, LoadCursorW, GetDC, AdjustWindowRect
 IMPORT GetAsyncKeyState, GetCursorPos, ScreenToClient, GetForegroundWindow
 IMPORT CreateCompatibleDC, CreateDIBSection, SelectObject, SetBkMode, SetTextColor, TextOutW
-IMPORT StretchBlt, SetStretchBltMode, CreateFontW, GdiFlush, SetTextAlign
+IMPORT StretchBlt, SetStretchBltMode, CreateFontW, GdiFlush, DeleteObject
+IMPORT GetTextExtentPoint32W, GetCharWidth32W
 IMPORT DwmFlush
 IMPORT SetWindowLongPtrW, SetWindowPos, GetWindowPlacement, SetWindowPlacement
 IMPORT MonitorFromWindow, GetMonitorInfoW, PatBlt

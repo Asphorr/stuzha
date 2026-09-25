@@ -4,7 +4,7 @@
 ;  стихает. Поле ветра по месту: порывы — два слоя шума, бегущие по ветру;
 ;  затишье за избами, заборами, елями и подпор перед ними — развёртка по ветру
 ;  над картой заслонителей. Сила 1 ≈ 12 м/с ≈ 6 тайлов/с.
-;  Здесь же: маска позёмки на кадр, текстуры полос и инея, стрелка ветра в HUD.
+;  Здесь же: маска позёмки на кадр, текстуры полос и инея, строка ветра для HUD.
 ; ----------------------------------------------------------------------------
 section .text
 
@@ -1532,8 +1532,9 @@ dump_wind:
     ret
 
 ; ---------------------------------------------------------------- HUD: строка ветра
-; tbuf <- «ветер Ю 7 м/с · метель»: откуда дует (8 румбов: С = +x, В = +y), сколько
-; у игрока (с порывами, сглажено), погода — метель / позёмка / снег; в затишье — «тихо»
+; tbuf <- «Ю 7 м/с · метель» (рядом — компас, hud.inc): откуда дует (8 румбов: С = +x,
+; В = +y), сколько у игрока (с порывами, сглажено), погода — метель / позёмка / снег;
+; в затишье — «тихо»
 wind_text:
     push    rbx
     push    rsi
@@ -1549,8 +1550,6 @@ wind_text:
     call    wput_str
     jmp     .suf
 .wind:
-    lea     rsi, [s_wind]
-    call    wput_str
     ; румб, ближайший к «откуда»: max (−ветер)·румб
     movss   xmm4, [wind_dx]
     xorps   xmm4, [f_signmask]
@@ -1611,153 +1610,4 @@ wind_text:
     pop     rdi
     pop     rsi
     pop     rbx
-    ret
-
-; ---------------------------------------------------------------- HUD: стрелка ветра
-; под часами: куда дует у игрока (с порывами), длина — по силе
-draw_windhud:
-    sub     rsp, 40
-    ; экранное направление ветра у игрока: (2(vx − vy), vx + vy)
-    movss   xmm0, [pl_wvx]
-    subss   xmm0, [pl_wvy]
-    addss   xmm0, xmm0
-    movss   xmm1, [pl_wvx]
-    addss   xmm1, [pl_wvy]
-    movaps  xmm2, xmm0
-    mulss   xmm2, xmm0
-    movaps  xmm3, xmm1
-    mulss   xmm3, xmm1
-    addss   xmm2, xmm3
-    sqrtss  xmm2, xmm2
-    comiss  xmm2, [f_0_01]
-    ja      .ok
-    ; штиль — стрелка по общему направлению
-    movss   xmm0, [wind_dx]
-    subss   xmm0, [wind_dy]
-    addss   xmm0, xmm0
-    movss   xmm1, [wind_dx]
-    addss   xmm1, [wind_dy]
-    movaps  xmm2, xmm0
-    mulss   xmm2, xmm0
-    movaps  xmm3, xmm1
-    mulss   xmm3, xmm1
-    addss   xmm2, xmm3
-    sqrtss  xmm2, xmm2
-.ok:
-    movss   xmm3, [f_1]
-    divss   xmm3, xmm2
-    mulss   xmm0, xmm3
-    mulss   xmm1, xmm3
-    movss   [wh_ux], xmm0
-    movss   [wh_uy], xmm1
-    ; полудлина 3.5..7 px
-    movss   xmm2, [pl_wsm]
-    mulss   xmm2, [f_3_5]
-    minss   xmm2, [f_3_5]
-    addss   xmm2, [f_3_5]
-    movss   [wh_r], xmm2
-    ; тень, потом стрелка
-    mov     dword [wh_col], 0x00101418
-    mov     dword [wh_ox], 1
-    call    .arrow
-    mov     dword [wh_col], 0x00C8D8E8
-    mov     dword [wh_ox], 0
-    call    .arrow
-    add     rsp, 40
-    ret
-.arrow:
-    push    rsi
-    sub     rsp, 32
-    ; древко
-    movss   xmm0, [wh_ux]
-    mulss   xmm0, [wh_r]
-    movss   xmm1, [wh_uy]
-    mulss   xmm1, [wh_r]
-    movss   xmm2, [f_wh_cx]
-    subss   xmm2, xmm0
-    movss   [wl_x0], xmm2
-    movss   xmm2, [f_wh_cy]
-    subss   xmm2, xmm1
-    movss   [wl_y0], xmm2
-    movss   xmm2, [f_wh_cx]
-    addss   xmm2, xmm0
-    movss   [wl_x1], xmm2
-    movss   [wh_tx], xmm2
-    movss   xmm2, [f_wh_cy]
-    addss   xmm2, xmm1
-    movss   [wl_y1], xmm2
-    movss   [wh_ty], xmm2
-    call    hud_line
-    ; наконечник: назад 3.5 px, вбок ±2.5
-    mov     esi, 2
-    movss   xmm4, [f_2_5]
-.hd:
-    movss   xmm0, [wh_tx]
-    movss   [wl_x0], xmm0
-    movss   xmm0, [wh_ty]
-    movss   [wl_y0], xmm0
-    movss   xmm0, [wh_ux]
-    mulss   xmm0, [f_3_5]
-    movss   xmm1, [wh_uy]
-    mulss   xmm1, xmm4
-    movss   xmm2, [wh_tx]
-    subss   xmm2, xmm0
-    addss   xmm2, xmm1
-    movss   [wl_x1], xmm2
-    movss   xmm0, [wh_uy]
-    mulss   xmm0, [f_3_5]
-    movss   xmm1, [wh_ux]
-    mulss   xmm1, xmm4
-    movss   xmm2, [wh_ty]
-    subss   xmm2, xmm0
-    subss   xmm2, xmm1
-    movss   [wl_y1], xmm2
-    movss   [wh_side], xmm4
-    call    hud_line
-    movss   xmm4, [wh_side]
-    xorps   xmm4, [f_signmask]
-    dec     esi
-    jnz     .hd
-    add     rsp, 32
-    pop     rsi
-    ret
-
-; отрезок (wl_x0, wl_y0) — (wl_x1, wl_y1) цветом wh_col со сдвигом wh_ox (тень)
-hud_line:
-    movss   xmm0, [wl_x1]
-    subss   xmm0, [wl_x0]
-    movss   xmm1, [wl_y1]
-    subss   xmm1, [wl_y0]
-    movaps  xmm2, xmm0
-    andps   xmm2, [f_absmask]
-    movaps  xmm3, xmm1
-    andps   xmm3, [f_absmask]
-    maxss   xmm2, xmm3
-    cvtss2si ecx, xmm2
-    inc     ecx
-    cvtsi2ss xmm2, ecx
-    divss   xmm0, xmm2
-    divss   xmm1, xmm2
-    movss   xmm2, [wl_x0]
-    movss   xmm3, [wl_y0]
-    mov     r9, [fbbits]
-    mov     r10d, [wh_col]
-    mov     r11d, [wh_ox]
-.p:
-    cvtss2si eax, xmm2
-    add     eax, r11d
-    cmp     eax, SCR_W
-    jae     .n
-    cvtss2si edx, xmm3
-    add     edx, r11d
-    cmp     edx, SCR_H
-    jae     .n
-    imul    edx, edx, SCR_W
-    add     eax, edx
-    mov     [r9 + rax*4], r10d
-.n:
-    addss   xmm2, xmm0
-    addss   xmm3, xmm1
-    dec     ecx
-    jns     .p
     ret

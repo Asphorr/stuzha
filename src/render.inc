@@ -1,5 +1,5 @@
 ; ----------------------------------------------------------------------------
-;  render.inc — камера, сетка света, пол, объекты, отложенное освещение, снег, HUD
+;  render.inc — камера, сетка света, пол, объекты, отложенное освещение, снег
 ; ----------------------------------------------------------------------------
 section .text
 
@@ -64,13 +64,7 @@ render:
     call    draw_frost                  ; иней по краям кадра, когда игрок мёрзнет
     call    draw_hitboxes               ; F3
     PROF    6
-    call    draw_hud
-    call    draw_text                   ; надписи — очередью
-    cmp     dword [pr_on], 0
-    jne     .async
-    mov     ecx, [fb_cur]               ; снимки: сразу, в этот же буфер
-    call    tq_run
-.async:
+    call    hud_build                   ; HUD — списком, рисует поток вывода (hud.inc)
     PROF    7
     add     rsp, 32
     pop     rbx
@@ -1790,130 +1784,5 @@ draw_flakes:
     pop     r12
     pop     rdi
     pop     rsi
-    pop     rbx
-    ret
-
-; ---------------------------------------------------------------- HUD
-; ecx = x, edx = y, r8d = w, r9d = h, eax = цвет
-fill_rect:
-    push    rbx
-    mov     r10, [fbbits]
-    mov     r11d, edx
-    add     r9d, edx
-.y:
-    cmp     r11d, r9d
-    jge     .done
-    imul    ebx, r11d, SCR_W
-    add     ebx, ecx
-    mov     edx, r8d
-.x:
-    test    edx, edx
-    jle     .ny
-    mov     [r10 + rbx*4], eax
-    inc     ebx
-    dec     edx
-    jmp     .x
-.ny:
-    inc     r11d
-    jmp     .y
-.done:
-    pop     rbx
-    ret
-
-; xmm0 = значение 0..100 -> eax = 0..100
-bar_len:
-    maxss   xmm0, [f_0]
-    minss   xmm0, [f_100]
-    cvttss2si eax, xmm0
-    ret
-
-draw_hud:
-    push    rbx
-    sub     rsp, 32
-    call    draw_windhud
-    mov     ecx, 10
-    mov     edx, 304
-    mov     r8d, 102
-    mov     r9d, 7
-    mov     eax, 0x00101418
-    call    fill_rect
-    movss   xmm0, [pl_hp]
-    call    bar_len
-    mov     r8d, eax
-    mov     ecx, 11
-    mov     edx, 305
-    mov     r9d, 5
-    mov     eax, 0x00C03030
-    call    fill_rect
-    ; тепло: рыжее, остывая — голубеет (ниже 60)
-    mov     ecx, 10
-    mov     edx, 316
-    mov     r8d, 102
-    mov     r9d, 7
-    mov     eax, 0x00101418
-    call    fill_rect
-    movss   xmm0, [pl_warm]
-    mulss   xmm0, [f_inv60]
-    CLAMP01 xmm0
-    mulss   xmm0, [f_256]
-    cvttss2si ecx, xmm0                 ; t·256
-    mov     eax, 0xE0 - 0x90
-    imul    eax, ecx
-    sar     eax, 8
-    add     eax, 0x90
-    shl     eax, 16                     ; R
-    mov     edx, 0x90 - 0xC0
-    imul    edx, ecx
-    sar     edx, 8
-    add     edx, 0xC0
-    shl     edx, 8                      ; G
-    or      eax, edx
-    mov     edx, 0x40 - 0xF0
-    imul    edx, ecx
-    sar     edx, 8
-    add     edx, 0xF0                   ; B
-    or      eax, edx
-    mov     ebx, eax
-    movss   xmm0, [pl_warm]
-    call    bar_len
-    mov     r8d, eax
-    mov     ecx, 11
-    mov     edx, 317
-    mov     r9d, 5
-    mov     eax, ebx
-    call    fill_rect
-    mov     ecx, 10
-    mov     edx, 328
-    mov     r8d, 102
-    mov     r9d, 7
-    mov     eax, 0x00101418
-    call    fill_rect
-    movss   xmm0, [pl_sta]
-    call    bar_len
-    mov     r8d, eax
-    mov     ecx, 11
-    mov     edx, 329
-    mov     r9d, 5
-    mov     eax, 0x00D8B040
-    call    fill_rect
-    mov     ecx, 10
-    mov     edx, 340
-    mov     r8d, 102
-    mov     r9d, 7
-    mov     eax, 0x00101418
-    call    fill_rect
-    movss   xmm0, [pl_bat]
-    call    bar_len
-    mov     r8d, eax
-    mov     ecx, 11
-    mov     edx, 341
-    mov     r9d, 5
-    mov     eax, 0x00406080
-    cmp     dword [pl_flash], 0
-    je      .b
-    mov     eax, 0x0070B8F0
-.b:
-    call    fill_rect
-    add     rsp, 32
     pop     rbx
     ret

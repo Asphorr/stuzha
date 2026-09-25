@@ -205,7 +205,6 @@ f_19:       dd 19.0
 f_0_32:     dd 0.32
 f_128:      dd 128.0
 f_26:       dd 26.0
-f_3_5:      dd 3.5
 f_49:       dd 49.0
 f_34:       dd 34.0
 f_18:       dd 18.0
@@ -322,8 +321,6 @@ f_inv65280: dd 1.5318627e-5
 f_wspd:     dd 6.0                      ; тайлов/с при силе 1
 f_wsu:      dd 96.0                     ; 16 px на тайл вдоль экрана · f_wspd
 f_wsv:      dd 48.0                     ; 8 px поперёк
-f_wh_cx:    dd 17.0                     ; стрелка ветра в HUD
-f_wh_cy:    dd 45.0
 f_0_15:     dd 0.15
 f_0_18:     dd 0.18
 f_0_42:     dd 0.42
@@ -739,31 +736,8 @@ cm_corpse:
 
 ; ---------------------------------------------------------------- строки UTF-16
 align 2, db 0
-s_face_mono:  dw __utf16__('Consolas'), 0
-s_face_serif: dw __utf16__('Georgia'), 0
 s_class:      dw __utf16__('StuzhaWnd'), 0
 s_wintitle:   dw __utf16__('Стужа — изометрия на NASM'), 0
-s_place:      dw __utf16__('Стужа'), 0
-s_night:      dw __utf16__(' · январь'), 0
-s_kills:      dw __utf16__('Упокоено: '), 0
-s_hp:         dw __utf16__('здоровье'), 0
-s_sta:        dw __utf16__('силы'), 0
-s_bat:        dw __utf16__('фонарь'), 0
-s_batdead:    dw __utf16__('фонарь сел'), 0
-s_title:      dw __utf16__('СТУЖА'), 0
-s_sub:        dw __utf16__('Зима. Мёртвые бродят по селу. Доживи до рассвета.'), 0
-s_ctrl:       dw __utf16__('WASD — идти · Shift — бежать · ЛКМ/Пробел — лопата · F — фонарь · M — звук · F11 — экран'), 0
-s_dead:       dw __utf16__('ТЫ ПОГИБ'), 0
-s_lasted:     dw __utf16__('Продержался до '), 0
-s_dawn:       dw __utf16__('РАССВЕТ'), 0
-s_survived:   dw __utf16__('Дожил до утра: '), 0
-s_sep_kills:  dw __utf16__(' · упокоено: '), 0
-s_again:      dw __utf16__('R — заново · Esc — выход'), 0
-s_frame:      dw __utf16__('кадр '), 0
-s_ms:         dw __utf16__(' мс'), 0
-s_warm:       dw __utf16__('тепло'), 0
-s_freeze:     dw __utf16__('замерзаешь'), 0
-s_wind:       dw __utf16__('ветер '), 0
 s_calm:       dw __utf16__('тихо'), 0
 s_mps:        dw __utf16__(' м/с'), 0
 s_blizz:      dw __utf16__(' · метель'), 0
@@ -901,18 +875,6 @@ gs_ph:      dd 0.0
 gs_il:      dd 0.0
 gs_i:       dd 0.0
 gs_vc:      dd 0.0
-wh_ux:      dd 0.0                      ; стрелка ветра
-wh_uy:      dd 0.0
-wh_r:       dd 0.0
-wh_tx:      dd 0.0
-wh_ty:      dd 0.0
-wh_side:    dd 0.0
-wh_col:     dd 0
-wh_ox:      dd 0
-wl_x0:      dd 0.0
-wl_y0:      dd 0.0
-wl_x1:      dd 0.0
-wl_y1:      dd 0.0
 fr_x:       dd 0.0                      ; gen_frost: игла, веточка
 fr_y:       dd 0.0
 fr_nx:      dd 0.0
@@ -1044,7 +1006,6 @@ ev_done:    dq 0                        ; поток вывода отпусти
 pr_t0:      dq 0
 pr_t1:      dq 0
 pr_ticks:   dq 0                        ; сколько поток вывода делал прошлый кадр
-tq_n:       dd 0, 0                     ; команд надписей в списке буфера
 sky_t0:     dq 0                        ; фоновая развёртка теней: начало, конец,
 sky_t1:     dq 0
 sky_ticks:  dq 0                        ; сколько шла (для --bench)
@@ -1061,9 +1022,6 @@ hwnd:       dq 0
 hdc:        dq 0
 memdc:      dq 0
 fbbits:     dq 0
-font_s:     dq 0
-font_m:     dq 0
-font_b:     dq 0
 qpf:        dq 0
 qpc_last:   dq 0
 qpc_now:    dq 0
@@ -1147,7 +1105,6 @@ glint:      dd 0
 grain_off:  dd 0
 frame_no:   dd 0
 frame_ms:   dd 0.0
-tmp_frac:   dd 0
 decay_pos:  dd 0
 z_pd2:      dd 0.0
 z_step:     dd 0.0
@@ -1208,7 +1165,6 @@ tbuf:       times 128 dw 0
 section .bss
 alignb 64
 bench_buf:  resq NBENCH*BSLOTS          ; --bench: время каждого прохода каждого кадра
-tq_buf:     resb 2*TQMAX*TQSZ           ; списки надписей двух буферов
 albedo:     resd SCR_W*SCR_H
 gposb:      resd SCR_W*SCR_H
 lgrid:      resd GW*GW

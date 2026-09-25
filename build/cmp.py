@@ -1,6 +1,7 @@
 # Сверка снимков до байта: перед переделкой — `python build/cmp.py save` (эталон
 # текущей сборкой в build/ref/), после — `python build/cmp.py [1,b,1i,...]`.
-# «i» в конце — с --intro (заставка поверх). Цифры «кадр N мс» не сравниваются.
+# «i» в конце — с --intro (заставка поверх). shotN.bmp — кадр без HUD (HUD рисуется
+# поверх растянутого кадра в viewN.bmp), так что сравнивается всё.
 # Ключи: --noavx, --threads N — передаются игре; --rgb — без четвёртого байта;
 # --exe X — снимать не stuzha.exe, а build/X (эталон старой сборкой).
 import os, sys, subprocess
@@ -9,7 +10,6 @@ import numpy as np
 BLD = os.path.dirname(os.path.abspath(__file__))
 REF = os.path.join(BLD, "ref")
 SHOTS = list("1234567890wbz") + ["1i", "bi", "6i"]
-MX0, MX1, MY0, MY1 = 520, 600, 22, 38          # «кадр N мс» справа вверху
 EXE = sys.argv[sys.argv.index("--exe") + 1] if "--exe" in sys.argv else "stuzha.exe"
 
 def load(p):
@@ -43,7 +43,6 @@ def main():
         b = load(shoot(s, extra)).astype(int)
         d = np.abs(a - b)
         d = (d[:, :, :3] if rgb else d).max(axis=2)
-        d[MY0:MY1, MX0:MX1] = 0
         n = int((d > 0).sum())
         if n:
             bad += 1

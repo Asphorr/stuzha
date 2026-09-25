@@ -415,7 +415,8 @@ run_shot:
     je      .svb
     call    dump_wind
 .svb:
-    call    save_bmp
+    call    save_bmp                    ; кадр без HUD — shotN.bmp
+    call    hud_shot                    ; он же с HUD в 1920x1080 — viewN.bmp
     cmp     byte [aud_wav], 0
     je      quit
     mov     ax, [s_shotname + 8]        ; shotN.wav рядом с shotN.bmp
@@ -473,8 +474,12 @@ bench_run:
     mov     rax, [qpc_end]
     sub     rax, [prof_last]
     mov     [prof_acc + 8*8], rax
-    mov     rax, [pr_ticks]             ; 10 — надписи и вывод прошлого кадра (в потоке)
+    mov     rax, [pr_ticks]             ; 10 — сборка с HUD и вывод прошлого кадра (в потоке)
     mov     [prof_acc + 10*8], rax
+    mov     rax, [hu_tscale]            ; 13, 19 — из них растяжка и HUD
+    mov     [prof_acc + 13*8], rax
+    mov     rax, [hu_thud]
+    mov     [prof_acc + 19*8], rax
     mov     rax, [sky_ticks]            ; 18 — развёртка теней (тем же заданием, что полосы)
     mov     [prof_acc + 18*8], rax
     mov     rax, [band_tmax]            ; 4 — самая долгая полоса объектов и крыш
@@ -833,6 +838,36 @@ parse_cmdline:
     mov     [pl_want], ecx
     jmp     .next
 .nth:
+    cmp     word [rax+4], 'v'           ; --view N: снимок с HUD высотой N (16:9), иначе 1080
+    jne     .nvw
+    cmp     word [rax+6], 'i'
+    jne     .nvw
+    lea     rdx, [rax+14]               ; за "--view "
+    xor     ecx, ecx
+.vwd:
+    movzx   r8d, word [rdx]
+    sub     r8d, '0'
+    cmp     r8d, 9
+    ja      .vwe
+    imul    ecx, ecx, 10
+    add     ecx, r8d
+    add     rdx, 2
+    jmp     .vwd
+.vwe:
+    cmp     ecx, 90                     ; меньше 160x90 — не снимок
+    jb      .next
+    cmp     ecx, 4320
+    ja      .next
+    mov     [view_h], ecx
+    mov     r10, rax
+    imul    eax, ecx, 16                ; ширина — 16/9 высоты
+    xor     edx, edx
+    mov     ecx, 9
+    div     ecx
+    mov     [view_w], eax
+    mov     rax, r10
+    jmp     .next
+.nvw:
     cmp     word [rax+4], 's'
     jne     .next
     cmp     word [rax+6], 'h'
@@ -899,10 +934,6 @@ init_gdi:
     mov     rcx, [rdx + rbx*8]
     mov     rdx, rax
     call    [SelectObject]
-    lea     rdx, [fb_dc]
-    mov     rcx, [rdx + rbx*8]
-    mov     edx, 1                      ; TRANSPARENT
-    call    [SetBkMode]
     inc     ebx
     cmp     ebx, 2
     jb      .buf
@@ -910,43 +941,9 @@ init_gdi:
     mov     [memdc], rax
     mov     rax, [fb_bits]
     mov     [fbbits], rax
-    mov     ecx, -12
-    mov     edx, 700
-    lea     r8, [s_face_mono]
-    call    make_font
-    mov     [font_s], rax
-    mov     ecx, -15
-    mov     edx, 700
-    lea     r8, [s_face_serif]
-    call    make_font
-    mov     [font_m], rax
-    mov     ecx, -34
-    mov     edx, 700
-    lea     r8, [s_face_serif]
-    call    make_font
-    mov     [font_b], rax
+    call    hud_init                    ; буфер вывода, шрифты HUD (hud.inc)
     add     rsp, 0x70
     pop     rbx
-    ret
-
-; ecx = высота, edx = жирность, r8 = имя шрифта -> rax
-make_font:
-    sub     rsp, 0x78
-    mov     [rsp+104], r8
-    mov     [rsp+32], rdx
-    xor     edx, edx
-    xor     r8d, r8d
-    xor     r9d, r9d
-    mov     qword [rsp+40], 0
-    mov     qword [rsp+48], 0
-    mov     qword [rsp+56], 0
-    mov     qword [rsp+64], 1           ; DEFAULT_CHARSET
-    mov     qword [rsp+72], 0
-    mov     qword [rsp+80], 0
-    mov     qword [rsp+88], 3           ; NONANTIALIASED_QUALITY
-    mov     qword [rsp+96], 0
-    call    [CreateFontW]
-    add     rsp, 0x78
     ret
 
 ; ---------------------------------------------------------------- окно
@@ -1178,11 +1175,9 @@ black_bar:
 .no:
     ret
 
-; ecx = буфер -> окно
+; собранный кадр (ob: растянутый, с HUD) -> окно
 present:
-    push    rbx
-    sub     rsp, 0x60
-    mov     ebx, ecx
+    sub     rsp, 0x68
     ; поля вокруг кадра (окно тянется, экран не 16:9)
     xor     ecx, ecx
     xor     edx, edx
@@ -1214,17 +1209,17 @@ present:
     mov     r9d, [vw_w]
     mov     eax, [vw_h]
     mov     [rsp+32], rax
-    lea     rax, [fb_dc]
-    mov     rax, [rax + rbx*8]
+    mov     rax, [ob_dc]
     mov     [rsp+40], rax
     mov     qword [rsp+48], 0
     mov     qword [rsp+56], 0
-    mov     qword [rsp+64], SCR_W
-    mov     qword [rsp+72], SCR_H
+    mov     eax, [ob_w]                 ; обычно 1:1 (окно могло смениться за кадр)
+    mov     [rsp+64], rax
+    mov     eax, [ob_h]
+    mov     [rsp+72], rax
     mov     qword [rsp+80], 0x00CC0020  ; SRCCOPY
     call    [StretchBlt]
-    add     rsp, 0x60
-    pop     rbx
+    add     rsp, 0x68
     ret
 
 ; ---------------------------------------------------------------- ввод
@@ -1303,153 +1298,11 @@ read_input:
     pop     rbx
     ret
 
-; ---------------------------------------------------------------- текст
-; ecx = x, edx = y, r8 = строка UTF-16, r9d = COLORREF (0x00BBGGRR)
-; Надписи идут очередью: set_font и text_out пишут команды в список кадра (свой у
-; каждого из двух буферов), tq_run исполняет его через GDI в том же порядке. В
-; живой игре это делает поток вывода, пока главный считает следующий кадр в другом
-; буфере (GDI-текст — ~1.2 мс, и он теперь не на пути кадра); в снимках — сразу,
-; в конце render. Пиксели те же: те же вызовы GDI в том же порядке
-TQMAX   equ 40                          ; команд на кадр
-TQSZ    equ 288
-TQ_T    equ 0                           ; 0 — шрифт, 1 — строка
-TQ_FONT equ 8                           ; шрифт: HFONT, выравнивание
-TQ_ALN  equ 16
-TQ_X    equ 4                           ; строка: x, y, цвет, число знаков, знаки
-TQ_Y    equ 8
-TQ_COL  equ 12
-TQ_LEN  equ 16
-TQ_STR  equ 20                          ; до 127 знаков UTF-16
-
-; -> rax = место под команду в списке текущего буфера (0 — список полон);
-; портит rcx, rdx, r8
-tq_slot:
-    mov     eax, [fb_cur]
-    lea     rdx, [tq_n]
-    mov     ecx, [rdx + rax*4]
-    cmp     ecx, TQMAX
-    jae     .full
-    lea     r8d, [rcx + 1]
-    mov     [rdx + rax*4], r8d
-    imul    eax, eax, TQMAX*TQSZ
-    imul    ecx, ecx, TQSZ
-    add     eax, ecx
-    lea     rdx, [tq_buf]
-    add     rax, rdx
-    ret
-.full:
-    xor     eax, eax
-    ret
-
-; ecx = x, edx = y, r8 = строка UTF-16, r9d = COLORREF (0x00BBGGRR): тень (+1,+1), текст
-text_out:
-    push    rsi
-    mov     rsi, r8
-    mov     r10d, ecx
-    mov     r11d, edx
-    call    tq_slot
-    test    rax, rax
-    jz      .out
-    mov     dword [rax + TQ_T], 1
-    mov     [rax + TQ_X], r10d
-    mov     [rax + TQ_Y], r11d
-    mov     [rax + TQ_COL], r9d
-    xor     ecx, ecx
-.cp:
-    movzx   edx, word [rsi + rcx*2]
-    test    edx, edx
-    jz      .end
-    mov     [rax + TQ_STR + rcx*2], dx
-    inc     ecx
-    cmp     ecx, 127
-    jb      .cp
-.end:
-    mov     [rax + TQ_LEN], ecx
-.out:
-    pop     rsi
-    ret
-
-; rcx = шрифт, edx = выравнивание (0 = TA_LEFT, 6 = TA_CENTER)
-set_font:
-    mov     r10, rcx
-    mov     r11d, edx
-    call    tq_slot
-    test    rax, rax
-    jz      .out
-    mov     dword [rax + TQ_T], 0
-    mov     [rax + TQ_FONT], r10
-    mov     [rax + TQ_ALN], r11d
-.out:
-    ret
-
-; ecx = буфер: его надписи — через GDI в его DC, список — пуст
-tq_run:
-    push    rbx
-    push    rsi
-    push    r12
-    push    r13
-    sub     rsp, 56
-    mov     r12d, ecx
-    lea     rax, [fb_dc]
-    mov     r13, [rax + r12*8]
-    lea     rax, [tq_n]
-    mov     ebx, [rax + r12*4]
-    mov     dword [rax + r12*4], 0
-    imul    eax, r12d, TQMAX*TQSZ
-    lea     rsi, [tq_buf]
-    add     rsi, rax
-    test    ebx, ebx
-    jz      .done
-.cmd:
-    cmp     dword [rsi + TQ_T], 0
-    jne     .text
-    mov     rcx, r13
-    mov     rdx, [rsi + TQ_FONT]
-    call    [SelectObject]
-    mov     rcx, r13
-    mov     edx, [rsi + TQ_ALN]
-    call    [SetTextAlign]
-    jmp     .nx
-.text:
-    mov     rcx, r13
-    mov     edx, 0x00100808
-    call    [SetTextColor]
-    mov     rcx, r13
-    mov     edx, [rsi + TQ_X]
-    inc     edx
-    mov     r8d, [rsi + TQ_Y]
-    inc     r8d
-    lea     r9, [rsi + TQ_STR]
-    mov     eax, [rsi + TQ_LEN]
-    mov     [rsp+32], rax
-    call    [TextOutW]
-    mov     rcx, r13
-    mov     edx, [rsi + TQ_COL]
-    call    [SetTextColor]
-    mov     rcx, r13
-    mov     edx, [rsi + TQ_X]
-    mov     r8d, [rsi + TQ_Y]
-    lea     r9, [rsi + TQ_STR]
-    mov     eax, [rsi + TQ_LEN]
-    mov     [rsp+32], rax
-    call    [TextOutW]
-.nx:
-    add     rsi, TQSZ
-    dec     ebx
-    jnz     .cmd
-.done:
-    call    [GdiFlush]
-    add     rsp, 56
-    pop     r13
-    pop     r12
-    pop     rsi
-    pop     rbx
-    ret
-
 ; ---------------------------------------------------------------- поток вывода
-; живая игра: главный поток отдаёт готовый кадр (всё, кроме надписей) и сразу
-; считает следующий в другом буфере; этот поток пишет надписи, выводит кадр в
-; окно и ждёт DwmFlush. Главный опережает его не больше чем на кадр
+; живая игра: главный поток отдаёт готовый кадр (без HUD, со списком HUD) и сразу
+; считает следующий в другом буфере; этот поток растягивает кадр под окно, рисует
+; поверх HUD (hud.inc), выводит в окно и ждёт DwmFlush. Главный опережает его не
+; больше чем на кадр
 pr_init:
     sub     rsp, 56
     xor     ecx, ecx
@@ -1485,8 +1338,9 @@ pr_thread:
     lea     rcx, [pr_t0]
     call    [QueryPerformanceCounter]
     mov     ecx, [pr_buf]
-    call    tq_run
-    mov     ecx, [pr_buf]
+    mov     edx, [vw_w]
+    mov     r8d, [vw_h]
+    call    hud_compose
     call    present
     call    [GdiFlush]
     lea     rcx, [pr_t1]
@@ -1591,191 +1445,6 @@ wput_clock:
     add     rdi, 10
     ret
 
-draw_text:
-    push    rbx
-    push    rsi
-    push    rdi
-    sub     rsp, 32
-    ; --- левый верх: название и часы
-    mov     rcx, [font_m]
-    xor     edx, edx
-    call    set_font
-    mov     ecx, 10
-    mov     edx, 6
-    lea     r8, [s_place]
-    mov     r9d, 0x00C8D8E8
-    call    text_out
-    mov     rcx, [font_s]
-    xor     edx, edx
-    call    set_font
-    lea     rdi, [tbuf]
-    call    wput_clock
-    lea     rsi, [s_night]
-    call    wput_str
-    mov     ecx, 11
-    mov     edx, 25
-    lea     r8, [tbuf]
-    mov     r9d, 0x00A0B0C0
-    call    text_out
-    ; --- правый верх: упокоено
-    lea     rdi, [tbuf]
-    lea     rsi, [s_kills]
-    call    wput_str
-    mov     eax, [kills]
-    call    wput_num
-    mov     ecx, 500
-    mov     edx, 8
-    lea     r8, [tbuf]
-    mov     r9d, 0x00B0C0D0
-    call    text_out
-    ; время кадра: "кадр 4.2 мс"
-    lea     rdi, [tbuf]
-    lea     rsi, [s_frame]
-    call    wput_str
-    movss   xmm0, [frame_ms]
-    mulss   xmm0, [f_10]
-    cvtss2si eax, xmm0
-    xor     edx, edx
-    mov     ecx, 10
-    div     ecx
-    mov     [tmp_frac], edx
-    call    wput_num
-    mov     word [rdi], '.'
-    add     rdi, 2
-    mov     eax, [tmp_frac]
-    call    wput_num
-    lea     rsi, [s_ms]
-    call    wput_str
-    mov     ecx, 500
-    mov     edx, 22
-    lea     r8, [tbuf]
-    mov     r9d, 0x00708090
-    call    text_out
-    ; --- ветер под часами: «ветер Ю 7 м/с · метель» (цифра — у игрока, с порывами)
-    call    wind_text
-    mov     ecx, 27
-    mov     edx, 39
-    lea     r8, [tbuf]
-    mov     r9d, 0x00B0B8C0
-    call    text_out
-    ; --- подписи полосок
-    mov     ecx, 116
-    mov     edx, 301
-    lea     r8, [s_hp]
-    mov     r9d, 0x008080D0
-    call    text_out
-    lea     r8, [s_warm]
-    mov     r9d, 0x0060A0E0
-    movss   xmm0, [pl_warm]
-    comiss  xmm0, [f_20]
-    jae     .wok
-    lea     r8, [s_freeze]
-    mov     r9d, 0x00F0D8B0
-.wok:
-    mov     ecx, 116
-    mov     edx, 313
-    call    text_out
-    mov     ecx, 116
-    mov     edx, 325
-    lea     r8, [s_sta]
-    mov     r9d, 0x0060C0D8
-    call    text_out
-    lea     r8, [s_bat]
-    mov     r9d, 0x00E0B070
-    movss   xmm0, [pl_bat]
-    comiss  xmm0, [f_0]
-    ja      .batok
-    lea     r8, [s_batdead]
-    mov     r9d, 0x004040E0
-.batok:
-    mov     ecx, 116
-    mov     edx, 337
-    call    text_out
-    ; --- оверлеи
-    cmp     dword [gstate], 1
-    je      .dead
-    cmp     dword [gstate], 2
-    je      .won
-    movss   xmm0, [elapsed]
-    comiss  xmm0, [f_7]
-    ja      .out
-    mov     rcx, [font_b]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 96
-    lea     r8, [s_title]
-    mov     r9d, 0x00E8F0F8
-    call    text_out
-    mov     rcx, [font_m]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 140
-    lea     r8, [s_sub]
-    mov     r9d, 0x00C0D0E0
-    call    text_out
-    mov     rcx, [font_s]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 164
-    lea     r8, [s_ctrl]
-    mov     r9d, 0x0090A0B0
-    call    text_out
-    jmp     .out
-.dead:
-    mov     rcx, [font_b]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 110
-    lea     r8, [s_dead]
-    mov     r9d, 0x003030D0
-    call    text_out
-    lea     rsi, [s_lasted]
-    jmp     .stats
-.won:
-    mov     rcx, [font_b]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 110
-    lea     r8, [s_dawn]
-    mov     r9d, 0x0080D0F8
-    call    text_out
-    lea     rsi, [s_survived]
-.stats:
-    lea     rdi, [tbuf]
-    call    wput_str
-    call    wput_clock
-    lea     rsi, [s_sep_kills]
-    call    wput_str
-    mov     eax, [kills]
-    call    wput_num
-    mov     rcx, [font_m]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 156
-    lea     r8, [tbuf]
-    mov     r9d, 0x00C0D0E0
-    call    text_out
-    mov     rcx, [font_s]
-    mov     edx, 6
-    call    set_font
-    mov     ecx, 320
-    mov     edx, 182
-    lea     r8, [s_again]
-    mov     r9d, 0x0090A0B0
-    call    text_out
-.out:
-    add     rsp, 32
-    pop     rdi
-    pop     rsi
-    pop     rbx
-    ret
-
 %include "world.inc"
 %include "props.inc"
 %include "game.inc"
@@ -1790,6 +1459,7 @@ draw_text:
 %include "post.inc"
 %include "lights.inc"
 %include "lightx.inc"                   ; после lights.inc: dl_row8 берёт его AL_*, константы
+%include "hud.inc"
 %include "pool.inc"
 %include "audio.inc"
 %include "data.inc"
