@@ -484,6 +484,8 @@ lg_rows:
 lg_soften:
     push    rsi
     push    rdi
+    cmp     dword [have_avx2], 0
+    jne     .x
     mov     r9d, 2
 .pass:
     lea     rsi, [lgv]
@@ -526,6 +528,78 @@ lg_soften:
     add     ecx, 16
     cmp     ecx, GW*GW*4
     jb      .a
+    pop     rdi
+    pop     rsi
+    ret
+    ; то же по 32 байта (длины проходов кратны 32 — те же границы); второй проход по
+    ; вертикали сразу и складывает с lgrid, lgs
+.x:
+    lea     rsi, [lgv]
+    lea     rdi, [lgt]
+    lea     r8, [lgrid]
+    lea     rdx, [lgs]
+    mov     r9d, 2
+.xp:
+    vmovdqu xmm0, [rsi]
+    vmovdqu [rdi], xmm0
+    mov     ecx, 16
+.xh:
+    vmovdqu ymm0, [rsi + rcx - 4]
+    vpavgb  ymm0, ymm0, [rsi + rcx + 4]
+    vpavgb  ymm0, ymm0, [rsi + rcx]
+    vmovdqu [rdi + rcx], ymm0
+    add     ecx, 32
+    cmp     ecx, GW*GW*4 - 16
+    jb      .xh
+    vmovdqu xmm0, [rsi + rcx]
+    vmovdqu [rdi + rcx], xmm0
+    mov     ecx, GW*4
+    cmp     r9d, 1
+    je      .xva
+.xv:
+    vmovdqu ymm0, [rdi + rcx - GW*4]
+    vpavgb  ymm0, ymm0, [rdi + rcx + GW*4]
+    vpavgb  ymm0, ymm0, [rdi + rcx]
+    vmovdqu [rsi + rcx], ymm0
+    add     ecx, 32
+    cmp     ecx, GW*GW*4 - GW*4
+    jb      .xv
+    dec     r9d
+    jmp     .xp
+.xva:
+    ; края (строка сверху и снизу) не размываются — прибавить как есть
+    xor     eax, eax
+.xa0:
+    vmovdqu ymm1, [rsi + rax]
+    vpaddusb ymm0, ymm1, [r8 + rax]
+    vmovdqu [r8 + rax], ymm0
+    vpaddusb ymm1, ymm1, [rdx + rax]
+    vmovdqu [rdx + rax], ymm1
+    add     eax, 32
+    cmp     eax, GW*4
+    jb      .xa0
+.xva1:
+    vmovdqu ymm1, [rdi + rcx - GW*4]
+    vpavgb  ymm1, ymm1, [rdi + rcx + GW*4]
+    vpavgb  ymm1, ymm1, [rdi + rcx]
+    vmovdqu [rsi + rcx], ymm1
+    vpaddusb ymm0, ymm1, [r8 + rcx]
+    vmovdqu [r8 + rcx], ymm0
+    vpaddusb ymm1, ymm1, [rdx + rcx]
+    vmovdqu [rdx + rcx], ymm1
+    add     ecx, 32
+    cmp     ecx, GW*GW*4 - GW*4
+    jb      .xva1
+.xa1:
+    vmovdqu ymm1, [rsi + rcx]
+    vpaddusb ymm0, ymm1, [r8 + rcx]
+    vmovdqu [r8 + rcx], ymm0
+    vpaddusb ymm1, ymm1, [rdx + rcx]
+    vmovdqu [rdx + rcx], ymm1
+    add     ecx, 32
+    cmp     ecx, GW*GW*4
+    jb      .xa1
+    vzeroupper
     pop     rdi
     pop     rsi
     ret
