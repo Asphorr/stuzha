@@ -2007,16 +2007,16 @@ draw_flakes:
     jne     .dln
     movss   xmm5, [r8 + AL_IRG]         ; окно — только у стекла
 .dl1:
-    movss   xmm0, xmm8
-    subss   xmm0, [r8 + AL_X]
+    movaps  xmm0, xmm8                  ; movaps, не movss: movss сливает верх и ждал бы
+    subss   xmm0, [r8 + AL_X]           ; прошлый огонь; дальше дорожка 0 — скаляры
     mulss   xmm0, [dd_pxu]
     mulss   xmm0, xmm0
-    movss   xmm1, xmm9
+    movaps  xmm1, xmm9
     subss   xmm1, [r8 + AL_Y]
     mulss   xmm1, [dd_pxu]
     mulss   xmm1, xmm1
     addss   xmm0, xmm1
-    movss   xmm1, xmm10
+    movaps  xmm1, xmm10
     subss   xmm1, [r8 + AL_Z]
     mulss   xmm1, xmm1
     addss   xmm0, xmm1
@@ -2039,13 +2039,13 @@ draw_flakes:
 .dfl:
     cmp     dword [dl_fon], 0
     je      .dmoon
-    movss   xmm0, xmm8
+    movaps  xmm0, xmm8
     subss   xmm0, [dl_sx]
     mulss   xmm0, [dd_pxu]              ; от руки, px-единицы
-    movss   xmm1, xmm9
+    movaps  xmm1, xmm9
     subss   xmm1, [dl_sy]
     mulss   xmm1, [dd_pxu]
-    movss   xmm2, xmm10
+    movaps  xmm2, xmm10
     subss   xmm2, [lt_handz]
     movss   xmm3, xmm0
     mulss   xmm3, [dl_ax]

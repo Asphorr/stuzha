@@ -201,7 +201,7 @@ draw_fig:
     ; бок: n = (oa + t·rd − ba·y/baba) / r
     comiss  xmm12, xmm11
     jae     .pkn
-    movss   xmm11, xmm12
+    movaps  xmm11, xmm12
     mov     r14, rbp
     mulss   xmm13, [rbp + FP_IBB]       ; y/baba
     movss   xmm14, [f_1]
@@ -365,7 +365,7 @@ draw_fig:
     xorps   xmm12, [f_signmask]         ; t = −b − √h
     comiss  xmm12, xmm11
     jae     .cr
-    movss   xmm11, xmm12
+    movaps  xmm11, xmm12
     mov     r14, rbp
     movss   xmm14, [f_1]
     divss   xmm14, [rbp + FP_R]
