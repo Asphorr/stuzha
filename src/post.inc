@@ -660,6 +660,7 @@ draw_cones:
     lea     eax, [esi + r13d]
     cmp     eax, SCR_W
     jae     .xn
+    xorps   xmm0, xmm0                  ; иначе ждёт пиксель прошлого шага (слияние верха)
     cvtsi2ss xmm0, r13d
     addss   xmm0, [f_0_5]
     mulss   xmm0, xmm2
@@ -959,7 +960,8 @@ draw_pillars:
     jae     .phn
     cmp     r12d, 4
     jb      .phn
-    ; мерцание: два синуса по высоте, бегут медленно
+    ; мерцание: два синуса по высоте, бегут медленно (xorps — cvtsi2ss не ждёт прошлое)
+    xorps   xmm0, xmm0
     cvtsi2ss xmm0, r12d
     mulss   xmm0, [pl_f1]
     movss   xmm1, [wind_t]
@@ -967,6 +969,7 @@ draw_pillars:
     addss   xmm0, xmm1
     call    fsin
     movss   [rsp + PL_A], xmm0
+    xorps   xmm0, xmm0
     cvtsi2ss xmm0, r12d
     mulss   xmm0, [pl_f2]
     movss   xmm1, [wind_t]
@@ -978,18 +981,21 @@ draw_pillars:
     addss   xmm0, [pl_s0]
     mulss   xmm0, [rsp + PL_E]
     lea     eax, [r12d - 3]
+    xorps   xmm1, xmm1
     cvtsi2ss xmm1, eax
     mulss   xmm1, [f_0_1]
     minss   xmm1, [f_1]
     mulss   xmm0, xmm1
     mov     eax, PL_H                   ; верхние 40 px — на нет
     sub     eax, r12d
+    xorps   xmm1, xmm1
     cvtsi2ss xmm1, eax
     mulss   xmm1, [pl_itop]
     minss   xmm1, [f_1]
     mulss   xmm0, xmm1
     movss   [rsp + PL_A], xmm0
     ; ширина: 0.9 + 0.012·h px, профиль (1 − u²)²
+    xorps   xmm0, xmm0
     cvtsi2ss xmm0, r12d
     mulss   xmm0, [pl_wk]
     addss   xmm0, [pl_w0]
@@ -1052,6 +1058,7 @@ draw_pillars:
     imul    edi, edi, SCR_W
     add     edi, [rsp + PL_IX]
     sub     edi, 25
+    vxorps  xmm9, xmm9, xmm9
     vcvtsi2ss xmm9, xmm9, r12d
     vmulss  xmm9, xmm9, xmm9
     vbroadcastss ymm9, xmm9             ; dy²
@@ -1080,10 +1087,12 @@ draw_pillars:
     add     eax, r13d
     cmp     eax, SCR_W
     jae     .hxn
+    xorps   xmm0, xmm0
     cvtsi2ss xmm0, r13d
     addss   xmm0, [f_0_5]
     subss   xmm0, [rsp + PL_FX]
     mulss   xmm0, xmm0
+    xorps   xmm2, xmm2
     cvtsi2ss xmm2, r12d
     mulss   xmm2, xmm2
     addss   xmm0, xmm2                  ; r²
@@ -1417,6 +1426,7 @@ draw_wires:
 .s:
     cmp     ebp, r14d
     jg      .wn
+    xorps   xmm0, xmm0                  ; xorps: cvtsi2ss не ждёт прошлый шаг
     cvtsi2ss xmm0, ebp
     mulss   xmm0, [dw_dt]               ; t
     movss   xmm1, [f_1]
@@ -1425,6 +1435,7 @@ draw_wires:
     mulss   xmm1, [f_4]                 ; 4t(1−t)
     mov     eax, [dw_bx]
     sub     eax, [dw_ax]
+    xorps   xmm2, xmm2
     cvtsi2ss xmm2, eax
     mulss   xmm2, xmm0
     movss   xmm3, [dw_px]
@@ -1434,6 +1445,7 @@ draw_wires:
     add     esi, [dw_ax]                ; wx
     mov     eax, [dw_by]
     sub     eax, [dw_ay]
+    xorps   xmm2, xmm2                  ; y не ждёт цепочку x
     cvtsi2ss xmm2, eax
     mulss   xmm2, xmm0
     movss   xmm3, [dw_py]

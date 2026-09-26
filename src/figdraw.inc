@@ -70,6 +70,7 @@ draw_fig:
     test    ecx, ecx
     jz      .rown
     ; начало луча строки: v·вниз + K·T (вниз по экрану = (√⅛, √⅛, −cos 30°))
+    xorps   xmm0, xmm0                  ; xorps: cvtsi2ss не ждёт прошлый столбец
     cvtsi2ss xmm0, eax
     addss   xmm0, [f_0_5]
     movaps  xmm1, xmm0
@@ -97,6 +98,7 @@ draw_fig:
     mov     eax, esi
     sub     eax, [fd_sx]
     mov     [fd_iu], eax
+    xorps   xmm0, xmm0
     cvtsi2ss xmm0, eax
     addss   xmm0, [f_0_5]
     mulss   xmm0, [vk_s2]

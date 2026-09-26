@@ -249,6 +249,7 @@ lg_rows:
     ; небо: рассеянный·AO (луна — попиксельно, по высоте и нормали, в light_pass)
     lea     rdx, [aomap]
     movzx   r8d, byte [rdx + rcx]
+    xorps   xmm1, xmm1                  ; xorps перед cvtsi2ss — без ложной зависимости
     cvtsi2ss xmm1, r8d
     mulss   xmm1, [f_inv255]
     shufps  xmm1, xmm1, 0
@@ -263,10 +264,12 @@ lg_rows:
     mov     esi, eax                    ; wx
     mov     ebp, ebx                    ; wy
     sub     eax, [plw_x]
+    xorps   xmm1, xmm1
     cvtsi2ss xmm1, eax
     mulss   xmm1, [f_inv256]            ; dx
     mov     eax, ebp
     sub     eax, [plw_y]
+    xorps   xmm2, xmm2
     cvtsi2ss xmm2, eax
     mulss   xmm2, [f_inv256]            ; dy
     movaps  xmm9, xmm1
@@ -2099,6 +2102,7 @@ draw_flakes:
     mulps   xmm0, xmm1
     addps   xmm11, xmm0
 .dmoon:
+    xorps   xmm0, xmm0                  ; не ждать сумму огней выше
     cvtsi2ss xmm0, dword [flk_moon]
     mulss   xmm0, [dd_mg]
     shufps  xmm0, xmm0, 0

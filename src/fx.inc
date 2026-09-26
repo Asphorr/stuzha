@@ -1098,6 +1098,7 @@ parts_rows:
     mov     edx, r12d
     imul    edx, edx
     add     ecx, edx
+    xorps   xmm0, xmm0                  ; cvtsi2ss сливает верх: без xor ждал бы прошлый пиксель
     cvtsi2ss xmm0, ecx
     mulss   xmm0, xmm6
     movss   xmm1, [f_1]

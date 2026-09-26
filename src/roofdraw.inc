@@ -8,9 +8,11 @@
 ; Экранная точка: A = 16(sx − CX0) + 8, B = 32(sy − CY0) + 16; вдоль её луча
 ; a = (s + A)/2, b = (s − A)/2, z = (s − B)/32 (a, b — от камеры); s линейна по A, B
 rq_plane:
+    xorps   xmm4, xmm4
     cvtsi2ss xmm4, dword [camx]
     mulss   xmm4, xmm0
     subss   xmm3, xmm4
+    xorps   xmm4, xmm4
     cvtsi2ss xmm4, dword [camy]
     mulss   xmm4, xmm1
     subss   xmm3, xmm4                  ; t'
@@ -45,8 +47,10 @@ rq_planel:
 
 ; xmm0 = wx, xmm1 = wy (8.8), xmm2 = z (px), ecx = номер угла -> rq_x, rq_y
 rq_corner:
+    xorps   xmm4, xmm4                  ; xorps перед cvtsi2ss: без ложной зависимости
     cvtsi2ss xmm4, dword [camx]
     subss   xmm0, xmm4
+    xorps   xmm4, xmm4
     cvtsi2ss xmm4, dword [camy]
     subss   xmm1, xmm4
     movaps  xmm4, xmm0
@@ -128,6 +132,7 @@ rq_fill:
 .row:
     cmp     esi, [rq_r1]
     jg      .done
+    xorps   xmm0, xmm0                  ; не ждать прошлую строку
     cvtsi2ss xmm0, esi
     addss   xmm0, xmm12                 ; середина строки
     movss   xmm4, [f_1e9]
@@ -166,6 +171,7 @@ rq_fill:
     ja      .rn
     subss   xmm4, xmm12
     cvttss2si edi, xmm4                 ; первая колонка = ceil(xl − 0.5)
+    xorps   xmm2, xmm2
     cvtsi2ss xmm2, edi
     comiss  xmm2, xmm4
     jae     .x0
@@ -173,6 +179,7 @@ rq_fill:
 .x0:
     subss   xmm5, xmm12
     cvttss2si eax, xmm5
+    xorps   xmm2, xmm2
     cvtsi2ss xmm2, eax
     comiss  xmm2, xmm5
     jbe     .x1
@@ -191,10 +198,12 @@ rq_fill:
     lea     eax, [esi - CY0]
     shl     eax, 5
     add     eax, 16
+    xorps   xmm9, xmm9
     cvtsi2ss xmm9, eax                  ; B
     lea     eax, [edi - CX0]
     shl     eax, 4
     add     eax, 8
+    xorps   xmm7, xmm7
     cvtsi2ss xmm7, eax                  ; A
     movss   xmm6, [rq_sa]
     mulss   xmm6, xmm7
@@ -1075,14 +1084,12 @@ sh_slope:
     cmp     eax, (RCH + 52) * (RCH + 52)
     jae     .nomelt
     sub     eax, (RCH + 30) * (RCH + 30)
-    imul    eax, eax, 1024
-    xor     edx, edx
-    mov     ecx, (RCH + 52) * (RCH + 52) - (RCH + 30) * (RCH + 30)
-    div     ecx
+    shl     eax, 10                     ; N = (d² − r0²)·1024
     mov     edx, r10d
-    shr     edx, 22
-    cmp     edx, eax
-    ja      .wet
+    shr     edx, 22                     ; e = 0..1023
+    imul    edx, edx, (RCH + 52) * (RCH + 52) - (RCH + 30) * (RCH + 30)
+    cmp     eax, edx                    ; e > ⌊N/D⌋ ⇔ N < e·D — без деления
+    jb      .wet
 .nomelt:
     test    dword [ri_fl], HF_SLIDE
     jz      .snow
