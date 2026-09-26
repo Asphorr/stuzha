@@ -857,6 +857,7 @@ dl_frame:
     xor     eax, eax
     mov     ecx, DT_W*DT_H
     rep     stosq
+    mov     [dl_hidm], rax
     xor     r15d, r15d                  ; огней кадра
     mov     dword [rsp + 60], 0         ; проход: 0 — фонари (важнее), 1 — остальное
 .pass:
@@ -1014,6 +1015,15 @@ dl_frame:
     mov     ecx, [r12 + L_HID]
 .h2:
     mov     [r14 + AL_HID], ecx
+    test    ecx, ecx
+    jnz     .hm
+    cmp     eax, LK_WIN
+    jne     .hn
+.hm:
+    mov     rdx, [dl_hidm]              ; огню нужна изба под пикселем (dl_row8)
+    bts     rdx, r15
+    mov     [dl_hidm], rdx
+.hn:
     ; карта горизонта
     mov     qword [r14 + AL_HM], 0
     mov     ecx, [r12 + L_HM]
@@ -4044,6 +4054,7 @@ hz_used:    dd 0                        ; занято в hz_pool, дворды
 section .bss
 alignb 64
 dl_tm:      resq DT_W*DT_H              ; маски огней по плиткам экрана
+dl_hidm:    resq 1                      ; огни, которым нужна изба под пикселем
 alignb 32
 al_buf:     resb AL_MAX*AL_SZ           ; огни кадра
 dl_fg:      resb DL_FGMAX*16            ; фигуры кадра: x, y (мир 8.8), номер записи тени

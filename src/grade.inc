@@ -392,6 +392,10 @@ gd_table:
 grade_pass:
     sub     rsp, 40
     lea     rcx, [grade_rows]
+    cmp     dword [have_avx2], 0
+    je      .sse
+    lea     rcx, [grade_rows_x]
+.sse:
     mov     edx, SCR_H
     mov     r8d, 8
     call    par_for
@@ -487,6 +491,95 @@ grade_rows:
     inc     r12d
     cmp     r12d, r13d
     jb      .row
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; то же на AVX2 — по 8 пикселей: половины 0, 1 | 4, 5 и 2, 3 | 6, 7 (как LXHALF), слова —
+; те же операции. Яркость восьми — один vphaddd по двум vpmaddwd (пары дордов пикселя
+; складываются сразу по порядку пикселей), строки таблицы — два сбора по qword, Y и S
+; по словам — внутрисполосный vpshufb; vpackuswb половин кладёт 8 пикселей подряд
+grade_rows_x:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    mov     r12d, ecx
+    mov     r13d, edx
+    mov     rsi, [fbbits]
+    lea     rdi, [gd_tab]
+    vpxor   ymm15, ymm15, ymm15
+    vbroadcasti128 ymm14, [gd_yw]
+    vbroadcasti128 ymm13, [gd_m3]
+    vmovdqa ymm12, [lx_pw0]             ; Y пикселя -> его 4 слова: A
+    vmovdqa ymm11, [lx_pw0 + 32]        ; B
+    vmovdqa ymm10, [lx_bw3]             ; S (слово 3) -> 4 слова
+.row:
+    imul    eax, r12d, SCR_W
+    lea     rbx, [rsi + rax*4]
+    vpxor   ymm9, ymm9, ymm9            ; яркость строки
+    vpxor   ymm8, ymm8, ymm8            ; её середины
+    xor     r10d, r10d                  ; байт в строке
+.px:
+    vmovdqu ymm0, [rbx + r10]
+    vpunpcklbw ymm1, ymm0, ymm15        ; A
+    vpunpckhbw ymm2, ymm0, ymm15        ; B
+    vpmaddwd ymm3, ymm1, ymm14          ; 29B + 150G | 77R — по пикселям
+    vpmaddwd ymm4, ymm2, ymm14
+    vphaddd ymm3, ymm3, ymm4            ; яркость·256: 0, 1, 2, 3 | 4, 5, 6, 7
+    vpsrld  ymm3, ymm3, 8               ; Y
+    vpaddd  ymm9, ymm9, ymm3
+    lea     eax, [r10d - 160*4]
+    cmp     eax, 320*4
+    jae     .nc
+    vpaddd  ymm8, ymm8, ymm3            ; x 160..479
+.nc:
+    vpermq  ymm4, ymm3, 0xD8            ; Y: 0, 1, 4, 5 | 2, 3, 6, 7
+    vextracti128 xmm5, ymm4, 1
+    vpcmpeqd ymm6, ymm6, ymm6
+    vpxor   ymm7, ymm7, ymm7
+    vpgatherdq ymm7, [rdi + xmm4*8], ymm6       ; O_B O_G O_R S — A
+    vpcmpeqd ymm6, ymm6, ymm6
+    vpxor   ymm0, ymm0, ymm0
+    vpgatherdq ymm0, [rdi + xmm5*8], ymm6       ; B
+    vpshufb ymm4, ymm3, ymm12           ; Y по словам
+    vpsubw  ymm1, ymm1, ymm4            ; d
+    vpshufb ymm6, ymm7, ymm10           ; S по словам
+    vpmullw ymm1, ymm1, ymm6
+    vpsraw  ymm1, ymm1, 6
+    vpaddw  ymm1, ymm1, ymm4
+    vpand   ymm7, ymm7, ymm13
+    vpaddw  ymm1, ymm1, ymm7
+    vpshufb ymm4, ymm3, ymm11
+    vpsubw  ymm2, ymm2, ymm4
+    vpshufb ymm6, ymm0, ymm10
+    vpmullw ymm2, ymm2, ymm6
+    vpsraw  ymm2, ymm2, 6
+    vpaddw  ymm2, ymm2, ymm4
+    vpand   ymm0, ymm0, ymm13
+    vpaddw  ymm2, ymm2, ymm0
+    vpackuswb ymm1, ymm1, ymm2
+    vmovdqu [rbx + r10], ymm1
+    add     r10d, 32
+    cmp     r10d, SCR_W*4
+    jb      .px
+    ; суммы дорожек
+    vextracti128 xmm0, ymm9, 1
+    vpaddd  xmm0, xmm0, xmm9
+    vextracti128 xmm1, ymm8, 1
+    vpaddd  xmm1, xmm1, xmm8
+    vphaddd xmm0, xmm0, xmm1            ; вся: 2 дорожки | середина: 2
+    vphaddd xmm0, xmm0, xmm0            ; вся | середина
+    lea     rax, [gd_rows]
+    vmovq   [rax + r12*8], xmm0
+    inc     r12d
+    cmp     r12d, r13d
+    jb      .row
+    vzeroupper
     pop     r13
     pop     r12
     pop     rdi

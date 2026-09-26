@@ -31,6 +31,10 @@ bloom_pass:
     push    rbp
     sub     rsp, 40
     lea     rcx, [bloom_down]
+    cmp     dword [have_avx2], 0
+    je      .bd
+    lea     rcx, [bloom_down_x]
+.bd:
     mov     edx, BLH
     mov     r8d, 4
     call    par_for
@@ -62,6 +66,10 @@ bloom_pass:
     dec     r15d
     jnz     .bit
     lea     rcx, [bloom_add]
+    cmp     dword [have_avx2], 0
+    je      .ba
+    lea     rcx, [bloom_add_x]
+.ba:
     mov     edx, SCR_H
     mov     r8d, 8
     call    par_for
@@ -141,6 +149,76 @@ bloom_down:
     inc     r12d
     cmp     r12d, r14d
     jb      .by
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; то же на AVX2: два блока рядом — в половинах ymm (те же операции по словам)
+bloom_down_x:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    mov     r12d, ecx
+    mov     r14d, edx
+    vpxor   ymm15, ymm15, ymm15
+    vbroadcasti128 ymm14, [bl_hot11]
+    vbroadcasti128 ymm13, [w_one]
+    vbroadcasti128 ymm12, [rgb_mask]
+    imul    eax, ecx, BLW*8
+    lea     rdi, [blA]
+    add     rdi, rax
+.by:
+    imul    esi, r12d, SCR_W*4*4
+    lea     rbx, [albedo]
+    add     rbx, rsi
+    xor     r13d, r13d
+.bx:
+    vpxor   ymm0, ymm0, ymm0
+    mov     rsi, rbx
+    mov     ecx, 4
+.rr:
+    vmovdqu ymm1, [rsi]
+    vpsrad  ymm2, ymm1, 31              ; эмиссивные
+    vpslld  ymm3, ymm1, 1
+    vpsrad  ymm3, ymm3, 31              ; горячие
+    vpand   ymm3, ymm3, ymm2
+    vpand   ymm1, ymm1, ymm2
+    vpand   ymm1, ymm1, ymm12
+    vpand   ymm3, ymm3, ymm14
+    vpunpcklbw ymm4, ymm1, ymm15
+    vpunpcklbw ymm5, ymm3, ymm15
+    vpaddw  ymm5, ymm5, ymm13
+    vpmullw ymm4, ymm4, ymm5
+    vpaddw  ymm0, ymm0, ymm4
+    vpunpckhbw ymm1, ymm1, ymm15
+    vpunpckhbw ymm3, ymm3, ymm15
+    vpaddw  ymm3, ymm3, ymm13
+    vpmullw ymm1, ymm1, ymm3
+    vpaddw  ymm0, ymm0, ymm1
+    add     rsi, SCR_W*4
+    dec     ecx
+    jnz     .rr
+    vpsrldq ymm1, ymm0, 8
+    vpaddw  ymm0, ymm0, ymm1
+    vpsrlw  ymm0, ymm0, 4
+    vpermq  ymm0, ymm0, 0x08            ; блоки — подряд
+    vmovdqu [rdi], xmm0
+    add     rdi, 16
+    add     rbx, 32
+    add     r13d, 2
+    cmp     r13d, BLW
+    jb      .bx
+    inc     r12d
+    cmp     r12d, r14d
+    jb      .by
+    vzeroupper
     pop     r14
     pop     r13
     pop     r12
@@ -251,6 +329,145 @@ bloom_add:
     pop     rdi
     pop     rsi
     pop     rbx
+    ret
+
+; то же на AVX2: пиксели x = 4t+1 .. 4t+4 берут одну пару текселей (t+1, t+2) с весами
+; k = 0..3 — четыре пикселя одним ymm (vpbroadcastq текселей, веса — bl_wx), пустую пару
+; видно раз на четвёрку; вертикаль строки — по 4 текселя. Края (x = 0, 637..639) — как у
+; bloom_add. Слова — те же операции
+bloom_add_x:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+    sub     rsp, BL_ROWSZ + 8
+    mov     [rsp + BL_ROWSZ], edx
+    mov     r12d, ecx
+    mov     r8, [fbbits]
+    movdqa  xmm11, [bl_gainv]
+    movdqa  xmm10, [w_400]
+    mov     rbx, rsp
+    lea     r15, [bl_wt]
+    vbroadcasti128 ymm12, [bl_gainv]
+    vbroadcasti128 ymm13, [w_400]
+    vmovdqu ymm14, [bl_wx]              ; веса a: 4, 3, 2, 1 — по пикселю
+    vmovdqu ymm15, [bl_wx + 32]         ; веса b: 0, 1, 2, 3
+.oy:
+    lea     eax, [r12d - 1]
+    mov     ecx, eax
+    sar     eax, 2                      ; t0
+    and     ecx, 3                      ; k
+    lea     edx, [eax + 1]
+    xor     r9d, r9d
+    cmp     eax, r9d
+    cmovl   eax, r9d
+    mov     r9d, BLH-1
+    cmp     edx, r9d
+    cmovg   edx, r9d
+    cmp     eax, r9d
+    cmovg   eax, r9d
+    imul    eax, eax, BLW*8
+    imul    edx, edx, BLW*8
+    lea     rsi, [blA]
+    lea     rdi, [rsi + rdx]
+    add     rsi, rax
+    shl     ecx, 4
+    vpbroadcastq ymm8, [r15 + rcx]
+    vpbroadcastq ymm9, [r15 + rcx + 8]
+    xor     ecx, ecx
+.rb:
+    vmovdqu ymm0, [rsi + rcx*8]
+    vpmullw ymm0, ymm0, ymm8
+    vpmullw ymm1, ymm9, [rdi + rcx*8]
+    vpaddw  ymm0, ymm0, ymm1
+    vpsrlw  ymm0, ymm0, 2
+    vmovdqu [rbx + rcx*8 + 8], ymm0
+    add     ecx, 4
+    cmp     ecx, BLW
+    jb      .rb
+    mov     rax, [rbx + 8]
+    mov     [rbx], rax
+    mov     rax, [rbx + BLW*8]
+    mov     [rbx + BLW*8 + 8], rax
+    imul    r13d, r12d, SCR_W
+    xor     r14d, r14d
+    mov     ebp, 1
+    call    .sc                         ; x = 0
+    ; x = 1 .. 636: четвёрки
+    lea     rdx, [r8 + r13*4 + 4]
+    mov     eax, 1                      ; t + 1
+.q:
+    mov     rcx, [rbx + rax*8]
+    or      rcx, [rbx + rax*8 + 8]
+    jz      .qn
+    vpbroadcastq ymm0, [rbx + rax*8]
+    vpbroadcastq ymm1, [rbx + rax*8 + 8]
+    vpmullw ymm0, ymm0, ymm14
+    vpmullw ymm1, ymm1, ymm15
+    vpaddw  ymm0, ymm0, ymm1
+    vpsrlw  ymm0, ymm0, 2
+    vpminsw ymm0, ymm0, ymm13
+    vpmullw ymm0, ymm0, ymm12
+    vpsrlw  ymm0, ymm0, 3
+    vpackuswb ymm0, ymm0, ymm0
+    vpermq  ymm0, ymm0, 0x08            ; пиксели k = 0, 1 | 2, 3 -> подряд
+    vpaddusb xmm0, xmm0, [rdx]
+    vmovdqu [rdx], xmm0
+.qn:
+    add     rdx, 16
+    inc     eax
+    cmp     eax, BLW
+    jb      .q
+    mov     r14d, SCR_W - 3
+    mov     ebp, SCR_W
+    call    .sc                         ; x = 637 .. 639
+    inc     r12d
+    cmp     r12d, [rsp + BL_ROWSZ]
+    jb      .oy
+    vzeroupper
+    add     rsp, BL_ROWSZ + 8
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+; пиксели r14d .. ebp−1 строки — по одному, как bloom_add (VEX: верх ymm занят)
+.sc:
+    lea     eax, [r14d - 1]
+    mov     ecx, eax
+    sar     eax, 2
+    and     ecx, 3
+    inc     eax
+    mov     rdx, [rbx + rax*8]
+    or      rdx, [rbx + rax*8 + 8]
+    jz      .scn
+    vmovq   xmm0, [rbx + rax*8]
+    vmovq   xmm1, [rbx + rax*8 + 8]
+    shl     ecx, 4
+    vpmullw xmm0, xmm0, [r15 + rcx]
+    vpmullw xmm1, xmm1, [r15 + rcx + 8]
+    vpaddw  xmm0, xmm0, xmm1
+    vpsrlw  xmm0, xmm0, 2
+    vpminsw xmm0, xmm0, xmm10
+    vpmullw xmm0, xmm0, xmm11
+    vpsrlw  xmm0, xmm0, 3
+    vpackuswb xmm0, xmm0, xmm0
+    lea     eax, [r13d + r14d]
+    vmovd   xmm1, [r8 + rax*4]
+    vpaddusb xmm1, xmm1, xmm0
+    vmovd   [r8 + rax*4], xmm1
+.scn:
+    inc     r14d
+    cmp     r14d, ebp
+    jb      .sc
     ret
 
 ; ящик 7 (края прижаты) по линиям: bb_src -> bb_dst, тексели по 4 слова; bb_al — шаг
@@ -509,6 +726,99 @@ PL_IY       equ 68
 PL_E        equ 72                      ; e^(−h/55)
 PL_A        equ 76                      ; сила строки
 PL_IW       equ 80                      ; 1 / полуширина строки
+PL_VOK      equ 84                      ; строки — по 8 пикселей (AVX2)
+PL_DX2      equ 96                      ; ореол: dx² семи групп
+PL_PV       equ 320                     ; столб: x + 0.5 − FX двух групп
+PL_SZ       equ 408
+
+; ymm15 = x + y лампы, ymm11..14 — цвет по каналам, ymm10 — байты по пикселям
+%macro PLCONST 0
+    vpbroadcastd ymm15, [rsp + PL_KEY]
+    vbroadcastss ymm14, [rsp + PL_COL]
+    vbroadcastss ymm13, [rsp + PL_COL + 4]
+    vbroadcastss ymm12, [rsp + PL_COL + 8]
+    vbroadcastss ymm11, [rsp + PL_COL + 12]
+    vmovdqu ymm10, [pl_tr]
+%endmacro
+; .add на 8 пикселях с rax: ymm0 = сила по дорожкам (0 — мимо); что ближе к глазу —
+; закрывает; цвет·сила -> cvttps2dq -> packssdw -> packuswb по каналам, как у .add;
+; четыре канала восьми пикселей -> байты по пикселям одним vpshufb (портит ymm1–4)
+%macro PLADD8 0
+    vmovdqu ymm1, [rsi + rax*4]
+    vpsrld  ymm2, ymm1, 16
+    vpand   ymm1, ymm1, [lx_dffff]
+    vpaddd  ymm1, ymm1, ymm2
+    vpcmpgtd ymm1, ymm1, ymm15
+    vpandn  ymm0, ymm1, ymm0
+    vmulps  ymm1, ymm0, ymm14
+    vmulps  ymm2, ymm0, ymm13
+    vmulps  ymm3, ymm0, ymm12
+    vmulps  ymm4, ymm0, ymm11
+    vcvttps2dq ymm1, ymm1
+    vcvttps2dq ymm2, ymm2
+    vcvttps2dq ymm3, ymm3
+    vcvttps2dq ymm4, ymm4
+    vpackssdw ymm1, ymm1, ymm2
+    vpackssdw ymm3, ymm3, ymm4
+    vpackuswb ymm1, ymm1, ymm3          ; B0..3 G0..3 R0..3 ·0..3 | то же 4..7
+    vpshufb ymm1, ymm1, ymm10
+    vpaddusb ymm1, ymm1, [r14 + rax*4]
+    vmovdqu [r14 + rax*4], ymm1
+%endmacro
+; группа %1 строки столба (edi — пиксель её дорожки 0 группы 0), ymm8 = 1/полуширина,
+; ymm9 = сила строки; %2 — у группы лишь три дорожки
+%macro PLCOL 2
+    vmulps  ymm0, ymm8, [rsp + PL_PV + 32*%1]
+    vmulps  ymm0, ymm0, ymm0
+    vmovaps ymm1, [lt_one4]
+    vsubps  ymm1, ymm1, ymm0            ; 1 − u²
+    vxorps  ymm2, ymm2, ymm2
+    vcmpps  ymm2, ymm1, ymm2, 0x1E      ; > 0
+%if %2
+    vandps  ymm2, ymm2, [pl_g6m]
+%endif
+    vmulps  ymm1, ymm1, ymm1
+    vmulps  ymm1, ymm1, ymm9
+    vandps  ymm0, ymm1, ymm2
+    lea     eax, [rdi + 8*%1]
+    PLADD8
+%endmacro
+; группа %1 строки ореола, ymm9 = dy²; %2 — лишь три дорожки
+%macro PLHALO 2
+    vaddps  ymm5, ymm9, [rsp + PL_DX2 + 32*%1]  ; r²
+    vcmpltps ymm6, ymm5, [pl_routv]     ; дальше кольца — пусто
+    vcmpltps ymm7, ymm5, [pl_rdiskv]
+    vcmpnltps ymm8, ymm5, [pl_rinv]     ; между диском и кольцом — пусто
+    vorps   ymm7, ymm7, ymm8
+    vandps  ymm6, ymm6, ymm7
+%if %2
+    vandps  ymm6, ymm6, [pl_g6m]
+%endif
+    vtestps ymm6, ymm6
+    jz      %%n
+    vmulps  ymm7, ymm5, [pl_ig2v]
+    vmovaps ymm8, [lt_one4]
+    vsubps  ymm7, ymm8, ymm7
+    vmaxps  ymm7, ymm7, [lt_zero4]
+    vmulps  ymm7, ymm7, ymm7
+    vmulps  ymm7, ymm7, [pl_agv]        ; диск
+    vsqrtps ymm5, ymm5
+    vsubps  ymm5, ymm5, [pl_r0v]
+    vmulps  ymm5, ymm5, [pl_irwv]
+    vmulps  ymm5, ymm5, ymm5
+    vsubps  ymm5, ymm8, ymm5
+    vmaxps  ymm5, ymm5, [lt_zero4]
+    vmulps  ymm5, ymm5, ymm5
+    vmulps  ymm5, ymm5, [pl_arv]        ; кольцо
+    vaddps  ymm0, ymm7, ymm5
+    vcmpps  ymm5, ymm0, [pl_epsv], 0x1D ; ≥ eps
+    vandps  ymm6, ymm6, ymm5
+    vandps  ymm0, ymm0, ymm6
+    lea     eax, [rdi + 8*%1]
+    PLADD8
+%%n:
+%endmacro
+
 draw_pillars:
     push    rbx
     push    rsi
@@ -518,7 +828,7 @@ draw_pillars:
     push    r14
     push    r15
     push    rbp
-    sub     rsp, 88
+    sub     rsp, PL_SZ
     movss   xmm0, [frost_k]
     comiss  xmm0, [f_0_03]
     jb      .out
@@ -591,6 +901,50 @@ draw_pillars:
     movss   [rsp + PL_FX], xmm2
     cvtss2si eax, xmm0
     mov     [rsp + PL_IY], eax
+    ; AVX2 и лампа не у края (x − 25 .. x + 30 в кадре): строки столба и ореола — по 8
+    ; пикселей подряд; dx по группам — заранее (те же операции, что по пикселю ниже)
+    mov     dword [rsp + PL_VOK], 0
+    cmp     dword [have_avx2], 0
+    je      .nv
+    mov     eax, [rsp + PL_IX]
+    cmp     eax, 25
+    jl      .nv
+    cmp     eax, SCR_W - 31
+    jg      .nv
+    mov     dword [rsp + PL_VOK], 1
+    vbroadcastss ymm1, [rsp + PL_FX]
+    vbroadcastss ymm2, [f_0_5]
+    xor     ecx, ecx
+.vg:
+    lea     eax, [rcx*8 - 25]
+    vmovd   xmm0, eax
+    vpbroadcastd ymm0, xmm0
+    vpaddd  ymm0, ymm0, [pl_lane8]
+    vcvtdq2ps ymm0, ymm0
+    vaddps  ymm0, ymm0, ymm2
+    vsubps  ymm0, ymm0, ymm1            ; x + 0.5 − FX
+    vmulps  ymm0, ymm0, ymm0
+    mov     eax, ecx
+    shl     eax, 5
+    vmovups [rsp + rax + PL_DX2], ymm0  ; ореол: dx²
+    inc     ecx
+    cmp     ecx, 7
+    jb      .vg
+    mov     eax, -5
+    vmovd   xmm0, eax
+    vpbroadcastd ymm0, xmm0
+    vpaddd  ymm0, ymm0, [pl_lane8]
+    vcvtdq2ps ymm3, ymm0
+    vaddps  ymm3, ymm3, ymm2
+    vsubps  ymm3, ymm3, ymm1
+    vmovups [rsp + PL_PV], ymm3         ; столб: x + 0.5 − FX, x = −5 .. 2
+    vpaddd  ymm0, ymm0, [pl_d8]
+    vcvtdq2ps ymm3, ymm0
+    vaddps  ymm3, ymm3, ymm2
+    vsubps  ymm3, ymm3, ymm1
+    vmovups [rsp + PL_PV + 32], ymm3    ; 3 .. 10
+    vzeroupper
+.nv:
     ; ----- столб: строка h над лампой
     mov     dword [rsp + PL_E], __float32__(1.0)
     mov     r12d, 1
@@ -643,6 +997,19 @@ draw_pillars:
     divss   xmm1, xmm0
     movss   [rsp + PL_IW], xmm1
     imul    edi, edi, SCR_W
+    cmp     dword [rsp + PL_VOK], 0
+    je      .ps
+    ; строка столба: пиксели x − 5 .. x + 10 (две группы, лишние дорожки — мимо)
+    PLCONST
+    vbroadcastss ymm8, [rsp + PL_IW]
+    vbroadcastss ymm9, [rsp + PL_A]
+    mov     eax, [rsp + PL_IX]
+    lea     edi, [rdi + rax - 5]
+    PLCOL   0, 0
+    PLCOL   1, 1
+    vzeroupper
+    jmp     .phn
+.ps:
     mov     r13d, -5
 .px:
     mov     eax, [rsp + PL_IX]
@@ -673,6 +1040,34 @@ draw_pillars:
     ; ----- ореол: мягкий диск (R 15) и бледное кольцо (r 21)
 .halo:
     mov     r12d, -25
+    cmp     dword [rsp + PL_VOK], 0
+    je      .hy
+    ; по 8 пикселей: x − 25 .. x + 30, семь групп (у последней три дорожки)
+    PLCONST
+.vhy:
+    mov     edi, [rsp + PL_IY]
+    add     edi, r12d
+    cmp     edi, SCR_H
+    jae     .vhyn
+    imul    edi, edi, SCR_W
+    add     edi, [rsp + PL_IX]
+    sub     edi, 25
+    vcvtsi2ss xmm9, xmm9, r12d
+    vmulss  xmm9, xmm9, xmm9
+    vbroadcastss ymm9, xmm9             ; dy²
+    PLHALO  0, 0
+    PLHALO  1, 0
+    PLHALO  2, 0
+    PLHALO  3, 0
+    PLHALO  4, 0
+    PLHALO  5, 0
+    PLHALO  6, 1
+.vhyn:
+    inc     r12d
+    cmp     r12d, 25
+    jle     .vhy
+    vzeroupper
+    jmp     .n
 .hy:
     mov     edi, [rsp + PL_IY]
     add     edi, r12d
@@ -733,7 +1128,7 @@ draw_pillars:
     dec     r15d
     jmp     .l
 .out:
-    add     rsp, 88
+    add     rsp, PL_SZ
     pop     rbp
     pop     r15
     pop     r14
@@ -789,6 +1184,21 @@ pl_eps:     dd 0.004
 pl_rdisk:   dd 225.0                    ; 15²
 pl_rin:     dd 366.0                    ; (22 − 2.86)²
 pl_rout:    dd 618.0                    ; (22 + 2.86)²
+; по 8 дорожек (те же числа)
+align 32, db 0
+pl_lane8:   dd 0, 1, 2, 3, 4, 5, 6, 7
+pl_d8:      times 8 dd 8
+pl_g6m:     dd -1, -1, -1, 0, 0, 0, 0, 0    ; у последней группы — три дорожки
+pl_tr:      times 2 db 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15
+pl_ig2v:    times 8 dd 0.0044444
+pl_agv:     times 8 dd 0.33
+pl_r0v:     times 8 dd 22.0
+pl_irwv:    times 8 dd 0.35
+pl_arv:     times 8 dd 0.045
+pl_epsv:    times 8 dd 0.004
+pl_rdiskv:  times 8 dd 225.0
+pl_rinv:    times 8 dd 366.0
+pl_routv:   times 8 dd 618.0
 
 section .text
 

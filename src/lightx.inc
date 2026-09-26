@@ -71,6 +71,9 @@ lx_gray64: times 4 dw 64, 128, 64, 0
 lx_dw64:  times 8 dd 0x00400040
 lx_dao0:  times 8 dd 0x01000100             ; AO нет: m = 256 | 256 << 16
 lx_dao1:  times 8 dd 0x01000000
+lt_dwmw:  times 8 dd WM_W                   ; маска рамы (vpmaddwd): строка
+V4 lt_blurv, 0.15                           ; те же числа, что lt_blur, f_inv255
+V4 lt_inv255v, 0.0039215686
 lx_hmask: times 8 dd 0                  ; dl_row8: дорожки четвёрок по битам 1, 2
           times 4 dd -1
           times 4 dd 0
@@ -773,13 +776,43 @@ DX_SZ       equ 1536
     vunpckhpd ymm6, ymm4, ymm6          ; a3 b3 c3 d3
 %endmacro
 
-; HZT из lights.inc: угол %1, ymm4 = (z + 64) << 16 (портит ymm0, ymm7)
-%macro HZT8 1
+; HZT из lights.inc: угол %1, %2 = (z + 64) << 16 его дорожек (портит ymm0, ymm7)
+%macro HZT8 2
     vpslld  ymm0, %1, 16
-    vpsubd  ymm7, ymm4, ymm0
+    vpsubd  ymm7, %2, ymm0
     vpmaddwd %1, ymm7, %1
     vpsrad  %1, %1, 8
     vpaddd  %1, %1, [lt_d128]
+%endmacro
+
+; .mask из lights.inc на 8 дорожках: rdx + ymm3 (+ %1) -> левый верхний байт 2x2, ymm1 =
+; fa, ymm2 = fb -> ymm0 (0..255); портит ymm4, ymm5, ymm7
+%macro WMSK8 1
+    vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm4, ymm4, ymm4
+    vpgatherdd ymm4, [rdx + ymm3 + %1], ymm7            ; m00, m01 — байты 0, 1
+    vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm5, ymm5, ymm5
+    vpgatherdd ymm5, [rdx + ymm3 + %1 + WM_W], ymm7     ; m10, m11
+    vpand   ymm0, ymm4, [lt_dff]
+    vcvtdq2ps ymm0, ymm0
+    vpsrld  ymm4, ymm4, 8
+    vpand   ymm4, ymm4, [lt_dff]
+    vcvtdq2ps ymm4, ymm4
+    vsubps  ymm4, ymm4, ymm0
+    vmulps  ymm4, ymm4, ymm1
+    vaddps  ymm0, ymm0, ymm4            ; ряд 0
+    vpand   ymm4, ymm5, [lt_dff]
+    vcvtdq2ps ymm4, ymm4
+    vpsrld  ymm5, ymm5, 8
+    vpand   ymm5, ymm5, [lt_dff]
+    vcvtdq2ps ymm5, ymm5
+    vsubps  ymm5, ymm5, ymm4
+    vmulps  ymm5, ymm5, ymm1
+    vaddps  ymm4, ymm4, ymm5            ; ряд 1
+    vsubps  ymm4, ymm4, ymm0
+    vmulps  ymm4, ymm4, ymm2
+    vaddps  ymm0, ymm0, ymm4
 %endmacro
 
 ; BNC1 из lights.inc: канал отсвета (байт со сдвигом %1) из углов ymm2 = c00,
@@ -935,7 +968,12 @@ dl_row8:
     call    .mf
     jmp     .gz1
 .g1:
-    ; изба под пикселем: rmap[(y >> 8)·128 + (x >> 8)]
+    ; изба под пикселем: rmap[(y >> 8)·128 + (x >> 8)] — если она нужна хоть одному
+    ; огню плитки (свет в избе, окно); rax — плитка
+    mov     rdx, [rbp + DX_TM]
+    mov     rdx, [rdx + rax*8]
+    test    rdx, [dl_hidm]
+    jz      .g1h
     vpsrld  ymm4, ymm1, 8
     vpslld  ymm4, ymm4, 7
     vpsrld  ymm5, ymm2, 8
@@ -945,6 +983,7 @@ dl_row8:
     vpgatherdd ymm6, [rsi + ymm4*1 + (rmap - albedo)], ymm5
     vpand   ymm6, ymm6, [lt_dff]
     vmovdqa [rbp + DX_HID], ymm6
+.g1h:
     ; сэмпл сетки света — как в light_rows: от окна сетки, прижато к [0, GLIM]
     vpbroadcastd ymm4, [rbp + DX_GOX]
     vpsubd  ymm2, ymm2, ymm4
@@ -1567,66 +1606,38 @@ dl_row8:
     vmulps  ymm3, ymm3, ymm1
     vandps  ymm3, ymm3, ymm7
     vmovaps [rbp + DX_FP], ymm3
-    ; маска рамы по дорожкам: чёткая и размытая, билинейно; дальше от рамы — размытее
-    vmovmskps ebx, ymm7                 ; (r14 — номер огня, нужен после)
-    xor     ecx, ecx
-.wl:
-    bt      ebx, ecx
-    jnc     .wln
-    vmovss  xmm1, [rbp + DX_A + rcx*4]
-    vmovss  xmm2, [rbp + DX_B + rcx*4]
-    vcvttss2si eax, xmm1
-    vcvtsi2ss xmm3, xmm3, eax
-    vsubss  xmm1, xmm1, xmm3            ; fa
-    vcvttss2si edx, xmm2
-    vcvtsi2ss xmm3, xmm3, edx
-    vsubss  xmm2, xmm2, xmm3            ; fb
-    imul    edx, edx, WM_W
-    add     edx, eax
-    mov     rax, [rdi + AL_WMS]
-    add     rdx, rax
-    call    .mask
-    vmovaps xmm6, xmm3                  ; чёткая
-    add     rdx, 256
-    call    .mask                       ; размытая
-    vmovss  xmm0, [f_1]
-    vmovss  xmm4, [rbp + DX_T + rcx*4]
-    vmaxss  xmm4, xmm4, [f_0_05]
-    vdivss  xmm0, xmm0, xmm4
-    vsubss  xmm0, xmm0, [f_1]
-    vmulss  xmm0, xmm0, [lt_blur]
-    vminss  xmm0, xmm0, [f_1]
-    vsubss  xmm3, xmm3, xmm6
-    vmulss  xmm3, xmm3, xmm0
-    vaddss  xmm3, xmm3, xmm6
-    vmulss  xmm3, xmm3, [f_inv255]
-    vmulss  xmm3, xmm3, [rbp + DX_FP + rcx*4]
-    vmovss  [rbp + DX_FP + rcx*4], xmm3
-.wln:
-    inc     ecx
-    cmp     ecx, 8
-    jb      .wl
+    ; маска рамы: чёткая и размытая, билинейно; дальше от рамы — размытее. Все 8
+    ; дорожек сразу: сбор дворда даёт пару байтов (m00, m01), строкой ниже — (m10, m11);
+    ; над f32 — те же операции, что у dl_row по дорожке, в том же порядке. Вне рамы
+    ; A = B = 0 (индекс 0) и FP = 0 — итог там 0, как без счёта
+    vmovaps ymm1, [rbp + DX_A]
+    vcvttps2dq ymm3, ymm1
+    vcvtdq2ps ymm4, ymm3
+    vsubps  ymm1, ymm1, ymm4            ; fa
+    vmovaps ymm2, [rbp + DX_B]
+    vcvttps2dq ymm4, ymm2
+    vcvtdq2ps ymm5, ymm4
+    vsubps  ymm2, ymm2, ymm5            ; fb
+    vpmaddwd ymm4, ymm4, [lt_dwmw]
+    vpaddd  ymm3, ymm3, ymm4            ; b·WM_W + a
+    mov     rdx, [rdi + AL_WMS]
+    WMSK8   0                           ; чёткая
+    vmovaps ymm6, ymm0
+    WMSK8   256                         ; размытая
+    vmovaps ymm4, [rbp + DX_T]
+    vmaxps  ymm4, ymm4, [lt_0_05v]
+    vmovaps ymm5, [lt_one4]
+    vdivps  ymm5, ymm5, ymm4
+    vsubps  ymm5, ymm5, [lt_one4]
+    vmulps  ymm5, ymm5, [lt_blurv]
+    vminps  ymm5, ymm5, [lt_one4]
+    vsubps  ymm0, ymm0, ymm6
+    vmulps  ymm0, ymm0, ymm5
+    vaddps  ymm0, ymm0, ymm6
+    vmulps  ymm0, ymm0, [lt_inv255v]
+    vmulps  ymm0, ymm0, [rbp + DX_FP]
+    vmovaps [rbp + DX_FP], ymm0
 .wr:
-    ret
-; rdx -> маска (левый верхний из 2x2), xmm1 = fa, xmm2 = fb -> xmm3 (0..255); портит xmm4, xmm5, eax
-.mask:
-    movzx   eax, byte [rdx]
-    vcvtsi2ss xmm3, xmm3, eax
-    movzx   eax, byte [rdx + 1]
-    vcvtsi2ss xmm4, xmm4, eax
-    vsubss  xmm4, xmm4, xmm3
-    vmulss  xmm4, xmm4, xmm1
-    vaddss  xmm3, xmm3, xmm4
-    movzx   eax, byte [rdx + WM_W]
-    vcvtsi2ss xmm4, xmm4, eax
-    movzx   eax, byte [rdx + WM_W + 1]
-    vcvtsi2ss xmm5, xmm5, eax
-    vsubss  xmm5, xmm5, xmm4
-    vmulss  xmm5, xmm5, xmm1
-    vaddss  xmm4, xmm4, xmm5
-    vsubss  xmm4, xmm4, xmm3
-    vmulss  xmm4, xmm4, xmm2
-    vaddss  xmm3, xmm3, xmm4
     ret
 
     ; ----- тень по карте горизонта огня (rdi) -> ymm5: 2x2 сэмпла у точки, сдвинутой к
@@ -1685,30 +1696,38 @@ dl_row8:
     vpbroadcastd ymm4, [rdi + AL_HMW]
     vpmaddwd ymm1, ymm1, ymm4
     vpaddd  ymm7, ymm1, ymm0            ; индекс j·W + i
+    ; c00 и c10 — соседние дворды: сбор по qword (4 дорожки на сбор, вдвое меньше
+    ; загрузок); дорожки в порядке 0, 1, 4, 5 | 2, 3, 6, 7 — тогда vpackssdw двух сборов
+    ; сам кладёт пары (t00, t10) по дорожкам 0..7, без перетасовок
+    vpermq  ymm7, ymm7, 0xD8
+    vpaddd  ymm4, ymm7, ymm4            ; строкой ниже
     mov     rdx, [rdi + AL_HM]
+    vextracti128 xmm0, ymm7, 1
     vpcmpeqd ymm5, ymm5, ymm5
     vpxor   ymm2, ymm2, ymm2
-    vpgatherdd ymm2, [rdx + ymm7*4], ymm5       ; c00
-    vpcmpeqd ymm5, ymm5, ymm5
-    vpxor   ymm1, ymm1, ymm1
-    vpgatherdd ymm1, [rdx + ymm7*4 + 4], ymm5   ; c10
-    vpaddd  ymm7, ymm7, ymm4                    ; строкой ниже
+    vpgatherdq ymm2, [rdx + xmm7*4], ymm5       ; c00 c10: дорожки 0, 1, 4, 5
     vpcmpeqd ymm5, ymm5, ymm5
     vpxor   ymm3, ymm3, ymm3
-    vpgatherdd ymm3, [rdx + ymm7*4], ymm5       ; c01
+    vpgatherdq ymm3, [rdx + xmm0*4], ymm5       ; 2, 3, 6, 7
+    vextracti128 xmm0, ymm4, 1
     vpcmpeqd ymm5, ymm5, ymm5
     vpxor   ymm6, ymm6, ymm6
-    vpgatherdd ymm6, [rdx + ymm7*4 + 4], ymm5   ; c11
+    vpgatherdq ymm6, [rdx + xmm4*4], ymm5       ; c01 c11
+    vpcmpeqd ymm5, ymm5, ymm5
+    vpxor   ymm1, ymm1, ymm1
+    vpgatherdq ymm1, [rdx + xmm0*4], ymm5
     vmovdqa ymm4, [rbp + DX_ZI]
     vpaddd  ymm4, ymm4, [lt_d64]
     vpslld  ymm4, ymm4, 16              ; (z + 64) << 16
-    HZT8    ymm2
-    HZT8    ymm1
-    HZT8    ymm3
-    HZT8    ymm6
-    ; углы словами, прижаты к 0..256: [t00 | t10], [t01 | t11]
-    vpackssdw ymm2, ymm2, ymm1
-    vpackssdw ymm3, ymm3, ymm6
+    vpunpckhdq ymm5, ymm4, ymm4         ; по парам углов: z2 z2 z3 z3 | z6 z6 z7 z7
+    vpunpckldq ymm4, ymm4, ymm4         ; z0 z0 z1 z1 | z4 z4 z5 z5
+    HZT8    ymm2, ymm4
+    HZT8    ymm6, ymm4
+    HZT8    ymm3, ymm5
+    HZT8    ymm1, ymm5
+    ; углы словами, прижаты к 0..256: пары [t00 | t10], [t01 | t11] по дорожкам
+    vpackssdw ymm2, ymm2, ymm3
+    vpackssdw ymm3, ymm6, ymm1
     vpxor   ymm0, ymm0, ymm0
     vpmaxsw ymm2, ymm2, ymm0
     vpmaxsw ymm3, ymm3, ymm0
@@ -1719,27 +1738,20 @@ dl_row8:
     vpslld  ymm5, ymm0, 16
     vpsubd  ymm5, ymm5, ymm0
     vpaddd  ymm5, ymm5, [lt_d64]        ; 64 − fx | fx << 16
-    vpshufd ymm0, ymm2, 0xEE
-    vpunpcklwd ymm2, ymm2, ymm0         ; t00 t10 по дорожкам
     vpmaddwd ymm2, ymm2, ymm5
-    vpshufd ymm0, ymm3, 0xEE
-    vpunpcklwd ymm3, ymm3, ymm0
     vpmaddwd ymm3, ymm3, ymm5
-    vpackssdw ymm2, ymm2, ymm3          ; ряды 0 | 1 (≤ 16384)
+    vpslld  ymm3, ymm3, 16
+    vpor    ymm2, ymm2, ymm3            ; ряды 0 | 1 << 16 (≤ 16384)
     vmovdqa ymm0, [rbp + DX_B]          ; fy
     vpslld  ymm5, ymm0, 16
     vpsubd  ymm5, ymm5, ymm0
     vpaddd  ymm5, ymm5, [lt_d64]
-    vpshufd ymm0, ymm2, 0xEE
-    vpunpcklwd ymm2, ymm2, ymm0
     vpmaddwd ymm2, ymm2, ymm5
     vcvtdq2ps ymm2, ymm2
     vmulps  ymm2, ymm2, [lt_i1mv]       ; 0..1
     vmovaps ymm0, [rbp + DX_TMP]
-    vandps  ymm2, ymm2, ymm0
-    vandnps ymm0, ymm0, [lt_one4]
-    vorps   ymm2, ymm2, ymm0            ; где не тенили — 1
-    vmovaps ymm5, ymm2
+    vmovaps ymm5, [lt_one4]
+    vblendvps ymm5, ymm5, ymm2, ymm0    ; где не тенили — 1
 .hzr:
     ret
 
