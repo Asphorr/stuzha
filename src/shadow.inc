@@ -968,8 +968,18 @@ sky_sweep:
 
 
 ; mzg (GW x GW): байт 1 — пропускание облаков (шум 64x64); до развёртки — она кладёт
-; облака в ячейки mz8
+; облака в ячейки mz8. Строки — пулом
 moon_grid:
+    sub     rsp, 40
+    lea     rcx, [moon_grid_rows]
+    mov     edx, GW
+    mov     r8d, 8
+    call    par_for
+    add     rsp, 40
+    ret
+
+; строки mzg ecx .. edx−1 (с любого потока пула)
+moon_grid_rows:
     push    rbx
     push    rsi
     push    rdi
@@ -978,9 +988,12 @@ moon_grid:
     push    r14
     push    r15
     push    rbp
+    mov     r14d, ecx                   ; j
+    mov     r13d, edx
+    imul    eax, ecx, GW*4
     lea     rdi, [mzg]
+    add     rdi, rax
     lea     r12, [cl_tab]
-    xor     r14d, r14d                  ; j
 .r:
     mov     eax, [goy]
     add     eax, r14d
@@ -1033,7 +1046,7 @@ moon_grid:
     cmp     r15d, GW
     jb      .c
     inc     r14d
-    cmp     r14d, GW
+    cmp     r14d, r13d
     jb      .r
     pop     rbp
     pop     r15
