@@ -1540,7 +1540,7 @@ fig_prep:
     mov     dword [rdi + FG_N], 0
     cmp     dword [rbx + E_ST], 0
     je      .n
-    ; в кадре ли (как в draw_entity, с запасом)
+    ; в кадре ли (как в draw_entity, с запасом: и тень той, что за краем, может лечь в кадр)
     movss   xmm0, [rbx + E_X]
     mulss   xmm0, [f_256]
     cvtss2si eax, xmm0
@@ -1553,16 +1553,16 @@ fig_prep:
     sub     edx, ecx
     sar     edx, 4
     add     edx, CX0
-    cmp     edx, -40
+    cmp     edx, -100
     jl      .n
-    cmp     edx, SCR_W + 40
+    cmp     edx, SCR_W + 100
     jg      .n
     add     eax, ecx
     sar     eax, 5
     add     eax, CY0
-    cmp     eax, -10
+    cmp     eax, -60
     jl      .n
-    cmp     eax, SCR_H + 50
+    cmp     eax, SCR_H + 90
     jg      .n
     call    fig_one
 .n:

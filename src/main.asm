@@ -141,6 +141,8 @@ run_shot:
     je      .s13
     cmp     eax, 14
     je      .s14
+    cmp     eax, 15
+    je      .s15
     cmp     eax, 7
     je      .s7
     cmp     eax, 8
@@ -264,6 +266,15 @@ run_shot:
     mov     dword [pl_flash], 1
     mov     dword [mx], 470
     mov     dword [my], 110
+    jmp     .zomb
+.s15:
+    ; g (15): 23:20, дорога; фонарик в идущих зомби у фонаря — тени руками и ногами
+    mov     dword [gtime], __float32__(1400.0)
+    mov     dword [pl_flash], 1
+    mov     dword [mx], 430
+    mov     dword [my], 250
+    lea     rax, [shot_zoffg]
+    mov     [shot_ztab], rax
 .zomb:
     ; --wav: вплотную зомби — только где они и нужны (бой, смерть, нюх); в остальных
     ; снимках слушаем место, а не драку за 15 с
@@ -884,8 +895,12 @@ save_bmp:
     mov     eax, 'z'
 .nm3:
     cmp     ecx, '0' + 14
-    jne     .nm
+    jne     .nm4
     mov     eax, 'f'
+.nm4:
+    cmp     ecx, '0' + 15
+    jne     .nm
+    mov     eax, 'g'
 .nm:
     mov     [s_shotname+8], ax
     lea     rcx, [s_shotname]
@@ -1140,8 +1155,13 @@ parse_cmdline:
     jmp     .dig
 .nf:
     cmp     ecx, 'f'
-    jne     .n0
+    jne     .ng
     mov     ecx, 13                     ; --shotf = 14: мороз
+    jmp     .dig
+.ng:
+    cmp     ecx, 'g'
+    jne     .n0
+    mov     ecx, 14                     ; --shotg = 15: тени зомби в луче и у фонаря
     jmp     .dig
 .n0:
     sub     ecx, '1'
@@ -1727,6 +1747,8 @@ wput_clock:
 %include "grade.inc"                    ; цвет кадра: палитры, ночное зрение, глаз
 %include "lights.inc"
 %include "lightx.inc"                   ; после lights.inc: dl_row8 берёт его AL_*, константы
+%include "hz16.inc"                     ; высоты 16 на тайл, карты горизонта огней лучами
+%include "ao16.inc"                     ; AO у земли по ним: 8 на тайл, попиксельно
 %include "hud.inc"
 %include "pool.inc"
 %include "audio.inc"
@@ -1734,5 +1756,6 @@ wput_clock:
 %include "veg.inc"                      ; лес: модели растений -> объёмные картинки
 %include "prop.inc"                     ; двор: заборы, фонари, лавки... — такими же моделями
 %include "fig.inc"                      ; люди и зомби: скелет из капсул, позы, одежда
+%include "figsh.inc"                    ; их тени: капсулы в мире, отрезок пиксель — огонь
 %include "data.inc"
 %include "bands.inc"                    ; последним: имена копий полос остаются определены

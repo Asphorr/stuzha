@@ -322,6 +322,7 @@ calc_hmap:
     inc     r13d
     cmp     r13d, MAPW
     jb      .ty
+    call    calc_hm16                   ; вдвое мельче — огням и фонарику (hz16.inc)
     call    veg_hmap                    ; растения — картами высот своих моделей
     add     rsp, 40
     pop     rbp
@@ -703,7 +704,7 @@ calc_ao:
 ; у основания предмета тень резкая, к концу расплывается (луна с ореолом — не точка).
 ; Дальше по лучу: заслонитель выше — луч с его верха и путь с нуля; над пустым снегом
 ; луч не опускается ниже −MFLR (иначе поперечная линейка съедала бы узкие тени).
-; Игрок и живые зомби на время развёртки вписываются в карту столбиками.
+; Тени игрока и зомби — не здесь: капсулами на луче к луне (figsh.inc, dl_row)
 sky_sweep:
     push    rbx
     push    rsi
@@ -714,7 +715,6 @@ sky_sweep:
     push    r15
     push    rbp
     sub     rsp, 40
-    mov     dword [nstamp], 0
     ; начало развёртки (ячейки) — в пределах полей карты
     mov     eax, [gox]
     add     eax, eax
@@ -772,7 +772,6 @@ sky_sweep:
     addss   xmm0, [f_1]
     mulss   xmm0, [f_0_08]
     movss   [mk_k], xmm0
-    call    stamp_ents
     ; оси: вдоль — большая составляющая направления на луну
     movss   xmm0, [sky_dx]
     movss   xmm1, [sky_dy]
@@ -936,7 +935,6 @@ sky_sweep:
     inc     r12d
     cmp     r12d, SW8 - MG8
     jb      .a
-    call    unstamp_ents
 .out:
     add     rsp, 40
     pop     rbp
@@ -968,92 +966,6 @@ sky_sweep:
     SWEEP4  1, 1
     ret
 
-; игрок и живые зомби — столбики в карте высот: 26 px, плечи 21 (старые байты — в stamps)
-stamp_ents:
-    push    rbx
-    push    rsi
-    lea     rbx, [pl]
-    call    .one
-    lea     rbx, [ents]
-    mov     esi, MAXE
-.l:
-    mov     eax, [rbx + E_ST]
-    cmp     eax, ST_WANDER
-    jb      .n
-    cmp     eax, ST_CORPSE
-    jae     .n
-    call    .one
-.n:
-    add     rbx, ESZ
-    dec     esi
-    jnz     .l
-    pop     rsi
-    pop     rbx
-    ret
-.one:
-    movss   xmm0, [rbx + E_X]
-    mulss   xmm0, [f_8]
-    cvttss2si eax, xmm0
-    movss   xmm0, [rbx + E_Y]
-    mulss   xmm0, [f_8]
-    cvttss2si edx, xmm0
-    cmp     eax, 1023
-    jae     .x
-    cmp     edx, 1023
-    jae     .x
-    add     edx, HPAD
-    imul    edx, edx, HW8
-    lea     eax, [eax + edx + HPAD]
-    mov     r8d, 26
-    call    .put
-    mov     r8d, 21
-    inc     eax
-    call    .put
-    sub     eax, 2
-    call    .put
-    add     eax, HW8 + 1
-    call    .put
-    sub     eax, 2*HW8
-    call    .put
-.x:
-    ret
-; eax = смещение, r8d = высота
-.put:
-    lea     rcx, [hmap8]
-    movzx   edx, byte [rcx + rax]
-    mov     r9d, edx
-    and     r9d, 0x7F
-    cmp     r9d, r8d
-    jae     .pn
-    mov     r9d, [nstamp]
-    cmp     r9d, MAXSTAMP
-    jae     .pn
-    lea     r10, [stamps]
-    mov     [r10 + r9*8], eax
-    mov     [r10 + r9*8 + 4], edx
-    inc     dword [nstamp]
-    and     edx, 0x80
-    or      edx, r8d
-    mov     [rcx + rax], dl
-.pn:
-    ret
-
-; вернуть карте прежние байты — в обратном порядке
-unstamp_ents:
-    mov     ecx, [nstamp]
-    lea     r8, [stamps]
-    lea     r9, [hmap8]
-.l:
-    test    ecx, ecx
-    jz      .d
-    dec     ecx
-    mov     eax, [r8 + rcx*8]
-    mov     edx, [r8 + rcx*8 + 4]
-    mov     [r9 + rax], dl
-    jmp     .l
-.d:
-    mov     dword [nstamp], 0
-    ret
 
 ; mzg (GW x GW): байт 1 — пропускание облаков (шум 64x64); до развёртки — она кладёт
 ; облака в ячейки mz8

@@ -679,6 +679,11 @@ shot_zoff8:
     dd 3.9, -3.6, ST_WANDER
     dd 3.6, -5.6, ST_WANDER
     dd -99.0
+shot_zoffg:
+    dd 2.3, 0.4, ST_WANDER
+    dd 3.5, -0.7, ST_WANDER
+    dd 4.8, 0.9, ST_WANDER
+    dd -99.0
 ; проверка нюха: ветер к +x — трое по ветру от игрока, трое против, дальше, чем видят
 shot_zoffz:
     dd 8.0, 0.0, ST_WANDER
@@ -901,7 +906,6 @@ m8_oy:      dd 0
 mo_x:       dd 0                        ; то же в 8.8 от центров ячеек (для light_pass)
 mo_y:       dd 0
 moon_on:    dd 0
-nstamp:     dd 0
 lt_h:       dd 0                        ; высота огня, px (запечка)
 lt_hf:      dd 0                        ; 1 — луч над картой высот, 0 — по тайлам
 ; огни
@@ -1203,7 +1207,6 @@ cols:       resb 4*SWD                  ; дорожки развёртки (д�
 msh:        resq NN                     ; сдвиг выборки к луне по нормали, 8.8
 wt8x:       resq 32                     ; веса 2x2: (32−f, f, 32−f, f)
 wt8y:       resq 32                     ;           (32−f, 32−f, f, f)
-stamps:     resq MAXSTAMP               ; вписанные ячейки фигур: смещение, старый байт
 prof:       resb 6*64                   ; тела вращения спрайтов: 32 высоты, 32 плотности
 hmap8:      resb HW8*HW8                ; биты 0-6 — высота заслонителя, px; бит 7 — под крышей
 nbuf:       resb SCR_W*SCR_H            ; нормаль пикселя (NOWN — свой свет)

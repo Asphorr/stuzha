@@ -23,14 +23,16 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, trees, people, light, weather and sound are all produced by
-~51k lines of hand-written NASM. The game is a single 583 KB executable.
+~54k lines of hand-written NASM. The game is a single 588 KB executable.
 
 **What's inside**
 
 - **Software renderer.** 640×360, scaled to the window. It uses a G-buffer
   (albedo, normals, world position) with deferred lighting on SSE2. The moon
-  casts contact-hardening soft shadows from a height map. There is also a view
-  cone that greys out what you cannot see, bloom and a frost overlay.
+  casts contact-hardening soft shadows from a height map, and the sky light
+  fades at the foot of walls, fences and trunks from a per-pixel occlusion map.
+  There is also a view cone that greys out what you cannot see, bloom and a
+  frost overlay.
 - **HUD at window resolution.** The frame is scaled to the window first, and
   the HUD is drawn on top at full resolution. Text is rasterized for the
   current scale into a glyph cache, each glyph with a soft shadow. Bars, icons,
@@ -39,10 +41,18 @@ files. The village, trees, people, light, weather and sound are all produced by
 - **Per-pixel light.** Street lamps, lit windows, the stove and the TV are
   computed for every pixel: 3D falloff, soft N·L, and shadows from each light's
   horizon map with a penumbra that widens away from the fence or wall casting
-  it. People and zombies cast shadows too. A window throws its frame, curtains
-  and whatever sits on the sill onto the snow, sharp by the wall and blurrier
-  farther out. The flashlight is a spotlight with a hot centre and a reflector
-  ring, zombies block it, and in a blizzard you see the beam in the air. Lit
+  it. The maps are traced over a height field with 16 cells per tile, so a
+  picket fence throws separate pickets and dry weeds throw their stalks. A
+  window throws its frame, curtains and whatever sits on the sill onto the
+  snow, sharp by the wall and blurrier farther out. The flashlight is a
+  spotlight with a hot centre and a reflector ring. Every frame it traces a
+  fan of 640 rays from your hand over the same height field, so fences,
+  woodpiles and furniture cast soft shadows in the beam, and in a blizzard you see the
+  beam in the air. People and zombies cast shadows from every lamp, window,
+  the flashlight and the moon: the segment from each pixel to the light is
+  tested against the capsules of their legs, arms, body and head, so the legs
+  stay apart in the shadow, an outstretched arm shows in it, and its edge
+  softens with distance. Lit
   snow bounces warm light onto walls and figures from below and glints under
   the lamps. Highlights roll off smoothly, and the brightest ones bleach
   toward white the way film does, so the sodium pool under a lamp turns
@@ -61,8 +71,9 @@ files. The village, trees, people, light, weather and sound are all produced by
 - **Fast on every core.** Per-row passes run on a small thread pool. Objects
   and roofs are drawn in horizontal screen bands at once: every band replays
   the same painter's order but writes only its own rows, and the band edges
-  follow last frame's timings. The moon shadow sweep runs on a background
-  thread from the start of the frame until the light pass needs it. Scaling
+  follow last frame's timings. The moon shadow sweep and the flashlight's ray
+  fan run on a background thread from the start of the frame until the light
+  pass needs them. Scaling
   to the window, the HUD and presenting happen on their own output thread,
   while the next frame is being rendered. Lighting and the
   floor have AVX2 paths (8 pixels per step) next to the SSE2 ones. Every path
@@ -182,7 +193,7 @@ The game can render fixed-seed scenes to files, which is how it was developed:
 | Flag | Output |
 |---|---|
 | `--shot1` … `--shot9`, `--shot0` | `build/shotN.bmp` (the 640×360 frame) and `build/viewN.bmp` (scaled to 1920×1080 with the HUD): night, dusk, inside an izba, walk, fight, death, yard, flashlight, dawn, behind a house |
-| `--shotw`, `--shotb`, `--shotf`, `--shotz` | wind at 21:40, a blizzard, the frost at 04:15, the scent test (`zlog.bin`) |
+| `--shotw`, `--shotb`, `--shotf`, `--shotg`, `--shotz` | wind at 21:40, a blizzard, the frost at 04:15, the flashlight at 23:20 with zombies in the beam, the scent test (`zlog.bin`) |
 | `--wav` (with a shot) | also records the scene's sound to `shotN.wav` |
 | `--sndtest` | every sound event and ambience in a row, then a distant dog and rooster → `sndtest.wav` |
 | `--hb`, `--lm`, `--wind`, `--soak` | hitboxes, baked lamp light, wind field from above, 3000-frame soak |
@@ -206,15 +217,16 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, деревья, люди, свет, погода и звук целиком получаются из ~51 тыс. строк
-NASM, написанных руками. Вся игра — один exe на 583 КБ.
+Село, деревья, люди, свет, погода и звук целиком получаются из ~54 тыс. строк
+NASM, написанных руками. Вся игра — один exe на 588 КБ.
 
 **Что внутри**
 
 - **Софтверный рендер.** 640×360 с масштабом под окно. Это G-буфер (цвет,
   нормали, мировые координаты) и отложенное освещение на SSE2. Луна даёт мягкие
-  тени по карте высот. Ещё там конус обзора (невидимое — серой памятью), блум и
-  иней по краям экрана.
+  тени по карте высот, а у подножия стен, заборов и стволов гаснет свет неба —
+  по попиксельной карте затенения. Ещё там конус обзора (невидимое — серой
+  памятью), блум и иней по краям экрана.
 - **HUD в разрешении окна.** Кадр сперва растягивается под окно, а HUD
   рисуется поверх в полном разрешении. Буквы растеризуются под текущий масштаб
   в кэш глифов, у каждой мягкая тень. Полосы, значки, линия ночи до рассвета и
@@ -222,10 +234,16 @@ NASM, написанных руками. Вся игра — один exe на 5
   шаг.
 - **Свет попиксельно.** Фонари, окна, печь и телевизор считаются на каждый
   пиксель: затухание в 3D, мягкое N·L и тени по карте горизонта каждого огня,
-  с полутенью, что растёт от забора или стены. Люди и зомби тоже отбрасывают
-  тени. Окно кладёт на снег свою раму, шторы и то, что стоит на подоконнике: у
+  с полутенью, что растёт от забора или стены. Карты строятся по полю высот в
+  16 ячеек на тайл, поэтому штакетник даёт отдельные штакетины, а сухой бурьян —
+  стебли. Окно кладёт на снег свою раму, шторы и то, что стоит на подоконнике: у
   стены резко, дальше размыто. Фонарик — прожектор с горячей серединой и
-  кольцом рефлектора, зомби его заслоняют, а в метель луч виден в воздухе.
+  кольцом рефлектора. Каждый кадр из руки идёт веер из 640 лучей по тому же
+  полю высот, так что заборы, поленницы и мебель бросают в луче мягкие тени, а в
+  метель луч виден в воздухе. Люди и зомби отбрасывают тени от каждого фонаря,
+  окна, фонарика и луны: отрезок от пикселя до огня проверяется против капсул
+  ног, рук, тела и головы, поэтому ноги в тени раздельные, вытянутая рука
+  видна, а край тени размывается с расстоянием.
   Освещённый снег подсвечивает стены и фигуры снизу и искрится под фонарями.
   Пересвет плавно уходит в насыщение, а самое яркое белеет, как на плёнке:
   натриевое пятно под фонарём в середине бледно-жёлтое, а не плоско-оранжевое.
@@ -243,8 +261,9 @@ NASM, написанных руками. Вся игра — один exe на 5
 - **На всех ядрах.** Построчные проходы идут на пуле потоков. Объекты и крыши
   рисуются сразу горизонтальными полосами экрана: каждая полоса проходит тот же
   порядок художника, но пишет только свои строки, а границы полос следуют за
-  временем прошлого кадра. Тени луны считаются фоновым потоком с начала кадра до
-  прохода света. Растяжка под окно, HUD и вывод идут в своём потоке, пока
+  временем прошлого кадра. Тени луны и веер лучей фонарика считаются фоновым
+  потоком с начала кадра до прохода света. Растяжка под окно, HUD и вывод идут в
+  своём потоке, пока
   считается следующий кадр. У освещения и пола
   есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
   же кадр до байта, это сверяется с однопоточной SSE2-сборкой. На i7-7700 кадр
@@ -341,6 +360,7 @@ Esc — выход.
 | ![Blizzard](docs/blizzard.png) | ![Inside an izba](docs/izba.png) |
 | ![Yard at 21:00](docs/yard.png) | ![Fight](docs/fight.png) |
 | ![Hard frost before dawn](docs/frost.png) | ![Dusk](docs/dusk.png) |
+| ![Flashlight among the dead](docs/flashlight.png) | ![Moon shadows on a windy night](docs/wind.png) |
 
 ## License
 

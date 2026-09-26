@@ -163,7 +163,10 @@ draw_veg:
     push    rax
     push    rcx
     mov     r8d, [rime_t]
-    lea     ecx, [edi + ebx]
+    lea     rcx, [vrs]
+    neg     ecx
+    add     ecx, ebx                    ; вариант (смещение записи), не адрес
+    add     ecx, edi
     imul    ecx, ecx, 0x2545F491
     mov     eax, ecx
     shr     eax, 15

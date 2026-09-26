@@ -44,6 +44,10 @@ lx_d29:   times 8 dd 29
 lx_d50:   times 8 dd 50
 lx_d21:   times 8 dd 21
 lx_d60:   times 8 dd 60
+lx_dm1:   times 8 dd -1
+lx_d16:   times 8 dd 16
+lx_daolim: times 8 dd AOLIM
+lx_bw01:  times 2 db 0,-1,1,-1, 4,-1,5,-1, 8,-1,9,-1, 12,-1,13,-1   ; байты 0, 1 дворда -> слова
 lx_hmask: times 8 dd 0                  ; dl_row8: дорожки четвёрок по битам 1, 2
           times 4 dd -1
           times 4 dd 0
@@ -91,6 +95,7 @@ LX_S00   equ 928                        ; 4 сэмпла сетки света
 LX_S01   equ 960
 LX_S10   equ 992
 LX_S11   equ 1024
+LX_AO    equ 1056                       ; AO у земли: множитель 0..256
 LX_SZ    equ 1088
 
 ; число в xmm (дворд на пиксель) -> ymm: в каждое слово пикселя
@@ -151,6 +156,11 @@ LX_SZ    equ 1088
     vpcmpeqd ymm8, ymm8, ymm8
     vpgatherdq ymm9, [rsi + xmm7*8 + (amb_d - albedo)], ymm8
     vpsubusw ymm10, ymm10, ymm9         ; грань видит меньше неба
+    vmovdqa xmm8, [rsp + LX_AO + 16*%1]
+    LXBC    ymm8, xmm8
+    vpblendw ymm8, ymm8, [lt_w256], 0x88
+    vpmullw ymm10, ymm10, ymm8
+    vpsrlw  ymm10, ymm10, 8             ; и низ у стен, заборов, стволов — AO
     vpmovzxbw ymm11, [rsi + rcx*4 + (lbuf - albedo) + 16*%1]
     vmovdqa xmm6, [rsp + LX_OWN + 16*%1]
     LXBC    ymm6, xmm6
@@ -376,8 +386,61 @@ light_rows_x:
     LXCELL  SW8*4, ymm5
     LXCELL  SW8*4 + 4, ymm6
     vpsrld  ymm15, ymm15, 10            ; дошло луны 0..255
+    vpmovzxbd ymm0, [rsi + rcx + (mfsh - albedo)]
+    vpsubd  ymm0, ymm0, [lx_dm1]
+    vpmulld ymm15, ymm15, ymm0
+    vpsrld  ymm15, ymm15, 8             ; и мимо фигур (dl_row8)
 .nomoon:
     vmovdqa [rsp + LX_MV], ymm15
+    ; ----- AO у земли (как в light_rows): множитель 0..256 (ymm2–4 не трогает)
+    vmovdqa ymm12, [lx_d256]
+    vmovdqa ymm5, [lx_d32]
+    vpcmpgtd ymm5, ymm5, ymm4           ; z < AO_ZF
+    vptest  ymm5, ymm5
+    jz      .aod                        ; все выше — AO нет
+    vpsubd  ymm8, ymm2, [lx_d16]
+    vpsubd  ymm9, ymm3, [lx_d16]
+    vpminud ymm8, ymm8, [lx_daolim]
+    vpminud ymm9, ymm9, [lx_daolim]
+    vpand   ymm10, ymm8, [lx_d31]       ; fx
+    vpand   ymm11, ymm9, [lx_d31]       ; fy
+    vpsrld  ymm8, ymm8, 5
+    vpsrld  ymm9, ymm9, 5
+    vpslld  ymm9, ymm9, 10              ; · AOW
+    vpaddd  ymm8, ymm8, ymm9
+    vpcmpeqd ymm7, ymm7, ymm7
+    vpgatherdd ymm12, [rsi + ymm8*1 + (ao16 - albedo)], ymm7
+    vpcmpeqd ymm7, ymm7, ymm7
+    vpgatherdd ymm13, [rsi + ymm8*1 + (ao16 - albedo) + AOW], ymm7
+    vpshufb ymm12, ymm12, [lx_bw01]     ; a00 | a01 << 16
+    vpshufb ymm13, ymm13, [lx_bw01]     ; a10 | a11 << 16
+    vmovdqa ymm14, [lx_d32]
+    vpsubd  ymm14, ymm14, ymm10
+    vpslld  ymm15, ymm10, 16
+    vpor    ymm14, ymm14, ymm15         ; 32 − fx | fx << 16
+    vpmaddwd ymm12, ymm12, ymm14
+    vpmaddwd ymm13, ymm13, ymm14
+    vpslld  ymm13, ymm13, 16
+    vpor    ymm12, ymm12, ymm13
+    vmovdqa ymm14, [lx_d32]
+    vpsubd  ymm14, ymm14, ymm11
+    vpslld  ymm15, ymm11, 16
+    vpor    ymm14, ymm14, ymm15         ; 32 − fy | fy << 16
+    vpmaddwd ymm12, ymm12, ymm14
+    vpsrld  ymm12, ymm12, 10            ; AO 0..255
+    vpsrld  ymm13, ymm12, 7
+    vpaddd  ymm12, ymm12, ymm13         ; 0..256
+    vmovdqa ymm13, [lx_d256]
+    vpsubd  ymm12, ymm13, ymm12
+    vmovdqa ymm14, [lx_d32]
+    vpsubd  ymm14, ymm14, ymm4
+    vpmaxsd ymm14, ymm14, [lx_d0]
+    vpminsd ymm14, ymm14, [lx_d32]      ; к AO_ZF px — на нет
+    vpmaddwd ymm12, ymm12, ymm14
+    vpsrld  ymm12, ymm12, 5
+    vpsubd  ymm12, ymm13, ymm12
+.aod:
+    vmovdqa [rsp + LX_AO], ymm12
     ; ----- сетка света: сэмпл, доли, 4 выборки
     vpsubd  ymm6, ymm2, [rsp + LX_GOX]
     vpsubd  ymm7, ymm3, [rsp + LX_GOY]
@@ -583,7 +646,29 @@ DX_TM       equ 832                     ; маски плиток строки (
 DX_TF       equ 840                     ; флаги плиток строки (адрес)
 DX_TP       equ 848                     ; пятна окон по плиткам строки (адрес)
 DX_TH       equ 856                     ; тени огней по плиткам строки (адрес)
-DX_SZ       equ 864
+DX_F0       equ 864                     ; тень фонарика: r (слоты), доли, углы
+DX_F1       equ 896
+DX_F2       equ 928
+DX_F3       equ 960
+DX_F4       equ 992
+DX_F5       equ 1024
+DX_F6       equ 1056
+DX_PX       equ 1088                    ; пиксель, px-единицы (x, y)
+DX_PY       equ 1120
+DX_AA       equ 1152                    ; тени фигур: |D|², 1/|D|², размер огня
+DX_IA       equ 1184
+DX_SZL      equ 1216
+DX_CB       equ 1248                    ; D·E
+DX_CF       equ 1280                    ; D·r0
+DX_NO       equ 1312                    ; не своя капсула
+DX_OM       equ 1344                    ; наибольшая доля тени
+DX_CM       equ 1376                    ; дорожки огня (и четвёрок, чью рамку тень задевает)
+DX_CM2      equ 1408                    ; дорожки фигуры
+DX_TG       equ 1440                    ; тени зомби от фонарика по плиткам строки (адрес)
+DX_TMF      equ 1448                    ; фигуры под луной по плиткам строки (адрес)
+DX_WM       equ 1456                    ; отсев капсул: запас на полутень огня
+DX_CMB      equ 1472                    ; тени фигур: дорожки, где тень что-то решает
+DX_SZ       equ 1504
 
 ; 16 байт на пиксель из [rsi + (%1 − albedo) + nid·16]: пиксели 0..3 — в нижние
 ; половины ymm4..7, 4..7 — в верхние (для TR4Y)
@@ -699,6 +784,14 @@ dl_row8:
     lea     r8, [dl_th]
     lea     r8, [r8 + rdx*8]
     mov     [rbp + DX_TH], r8
+    lea     r8, [dl_tfg]
+    lea     r8, [r8 + rdx*2]
+    mov     [rbp + DX_TG], r8
+    lea     r8, [dl_tmf]
+    lea     r8, [r8 + rdx*2]
+    mov     [rbp + DX_TMF], r8
+    mov     eax, [sc_wmax]
+    mov     [rbp + DX_WM], eax
     mov     eax, [camx]
     add     eax, [camy]
     mov     [rbp + DX_CAM], eax
@@ -742,10 +835,28 @@ dl_row8:
     vmovdqa [rbp + DX_ZI], ymm3
     vcvtdq2ps ymm4, ymm2
     vmovaps [rbp + DX_GX], ymm4
+    vmulps  ymm4, ymm4, [lt_pxu4]
+    vmovaps [rbp + DX_PX], ymm4
     vcvtdq2ps ymm4, ymm1
     vmovaps [rbp + DX_GY], ymm4
+    vmulps  ymm4, ymm4, [lt_pxu4]
+    vmovaps [rbp + DX_PY], ymm4
     vcvtdq2ps ymm4, ymm3
     vmovaps [rbp + DX_GZ], ymm4
+    mov     dword [rbp + DX_BBOK], 0
+    ; плитка только с тенями фигур под луной — их и всё (огней нет: dlb — 0)
+    mov     eax, r13d
+    shr     eax, 4
+    mov     rdx, [rbp + DX_TF]
+    movzx   ecx, byte [rdx + rax]
+    test    ecx, 1
+    jnz     .g1
+    mov     rdx, [rbp + DX_TM]
+    cmp     qword [rdx + rax*8], 0
+    jne     .g1
+    call    .mf
+    jmp     .gz1
+.g1:
     ; изба под пикселем: rmap[(y >> 8)·128 + (x >> 8)]
     vpsrld  ymm4, ymm1, 8
     vpslld  ymm4, ymm4, 7
@@ -799,10 +910,20 @@ dl_row8:
     vmovaps ymm8, ymm1                  ; 1 / (1 + обёртка)
     vmovaps [rbp + DX_BNC], ymm3
     vmovaps [rbp + DX_MSD], ymm6
+    ; ----- тени фигур под луной (ymm8–12 — нормаль — не трогает)
+    mov     eax, r13d
+    shr     eax, 4
+    mov     rdx, [rbp + DX_TF]
+    test    byte [rdx + rax], 4
+    jz      .g2
+    call    .mf
+    jmp     .g3
+.g2:
+    mov     qword [rsi + r12 + (mfsh - albedo)], -1
+.g3:
     vxorps  ymm13, ymm13, ymm13
     vxorps  ymm14, ymm14, ymm14
     vxorps  ymm15, ymm15, ymm15
-    mov     dword [rbp + DX_BBOK], 0
     ; ----- огни плитки
     mov     eax, r13d
     shr     eax, 4
@@ -937,8 +1058,8 @@ dl_row8:
     mov     eax, r13d
     shr     eax, 4
     mov     rdx, [rbp + DX_TF]
-    cmp     byte [rdx + rax], 0
-    je      .bn                         ; до плитки луч не достаёт
+    test    byte [rdx + rax], 1
+    jz      .bn                         ; до плитки луч не достаёт
     vbroadcastss ymm0, [dl_sx]
     vmovaps ymm1, [rbp + DX_GX]
     vsubps  ymm1, ymm1, ymm0
@@ -1016,55 +1137,6 @@ dl_row8:
     vminps  ymm0, ymm0, [lt_one4]
     vmulps  ymm0, ymm0, [lt_0_07v]
     vaddps  ymm1, ymm1, ymm0            ; профиль
-    ; тени зомби в луче: вдоль и поперёк от игрока (тайлы)
-    mov     ecx, [nocc]
-    test    ecx, ecx
-    jz      .nooc
-    vcvtsi2ss xmm0, xmm0, dword [plw_x]
-    vbroadcastss ymm0, xmm0
-    vmovaps ymm2, [rbp + DX_GX]
-    vsubps  ymm2, ymm2, ymm0
-    vmulps  ymm2, ymm2, [lt_i256v]
-    vcvtsi2ss xmm0, xmm0, dword [plw_y]
-    vbroadcastss ymm0, xmm0
-    vmovaps ymm3, [rbp + DX_GY]
-    vsubps  ymm3, ymm3, ymm0
-    vmulps  ymm3, ymm3, [lt_i256v]
-    lea     rdx, [occ]
-    vmovaps ymm7, [lt_one4]
-.oc:
-    vbroadcastss ymm4, [rdx]            ; ux
-    vbroadcastss ymm5, [rdx + 4]        ; uy
-    vmulps  ymm0, ymm2, ymm4
-    vmulps  ymm6, ymm3, ymm5
-    vaddps  ymm0, ymm0, ymm6            ; вдоль
-    vmulps  ymm5, ymm5, ymm2
-    vmulps  ymm4, ymm4, ymm3
-    vsubps  ymm5, ymm5, ymm4
-    vandps  ymm5, ymm5, [lt_absm]       ; поперёк
-    vbroadcastss ymm4, [rdx + 12]
-    vcmpltps ymm4, ymm4, ymm0           ; за зомби
-    vbroadcastss ymm6, [rdx + 16]
-    vmulps  ymm6, ymm6, ymm0
-    vsubps  ymm6, ymm6, ymm5
-    vbroadcastss ymm5, [rdx + 8]
-    vsubps  ymm0, ymm0, ymm5
-    vmulps  ymm0, ymm0, [lt_0_03v]
-    vaddps  ymm0, ymm0, [lt_0_05v]
-    vdivps  ymm6, ymm6, ymm0
-    vaddps  ymm6, ymm6, [lt_0_5v]
-    vmaxps  ymm6, ymm6, [lt_zero4]
-    vminps  ymm6, ymm6, [lt_one4]
-    vmulps  ymm6, ymm6, [lt_0_85v]
-    vandps  ymm6, ymm6, ymm4
-    vmovaps ymm0, [lt_one4]
-    vsubps  ymm0, ymm0, ymm6
-    vmulps  ymm7, ymm7, ymm0
-    add     rdx, OC_SZ
-    dec     ecx
-    jnz     .oc
-    vmulps  ymm1, ymm1, ymm7
-.nooc:
     ; затухание: 1/(1 + 0.022·d²) (тайлы), к краю дальности — на нет
     vmovaps ymm0, [rbp + DX_A]
     vmovaps ymm2, ymm0
@@ -1085,41 +1157,82 @@ dl_row8:
     vmulps  ymm1, ymm1, ymm3
     vmulps  ymm1, ymm1, [rbp + DX_B]    ; · N·L (0 вне луча)
     vmovaps [rbp + DX_F], ymm1
-    ; видно ли игроку: сетка видимости билинейно — дворд дорожки: байты c00 c10 c01 c11
-    ; (два сбора по слову); крыше — её видимость (lbuf)
-    vmovdqa ymm6, [rbp + DX_SIDX]
-    vpcmpeqd ymm5, ymm5, ymm5
-    vpxor   ymm0, ymm0, ymm0
-    vpgatherdd ymm0, [rsi + ymm6*1 + (losg - albedo)], ymm5
-    vpcmpeqd ymm5, ymm5, ymm5
+    ; тень: лучи от руки по карте высот (fl_buf), если в плитке есть что заслонять;
+    ; крыше — её видимость (lbuf)
+    vmovaps ymm2, [lt_one4]
+    mov     eax, r13d
+    shr     eax, 4
+    mov     rdx, [rbp + DX_TF]
+    test    byte [rdx + rax], 2
+    jz      .fl1
+    call    .fls
+.fl1:
+    ; зомби в луче, чьи тени задевают плитку, — капсулами от руки
+    mov     eax, r13d
+    shr     eax, 4
+    mov     rdx, [rbp + DX_TG]
+    movzx   r11d, word [rdx + rax*2]
+    test    r11d, r11d
+    jz      .fl2
+    ; дорожки, где тень что-то решает: луч дошёл, не крыша, рельеф не затенил
+    vmovaps ymm0, [rbp + DX_F]
     vpxor   ymm1, ymm1, ymm1
-    vpgatherdd ymm1, [rsi + ymm6*1 + (losg - albedo) + GW], ymm5
-    vpslld  ymm1, ymm1, 16
-    vpblendw ymm0, ymm0, ymm1, 0xAA
-    vpand   ymm1, ymm0, [lt_dff]
-    vpslld  ymm2, ymm0, 8
-    vpand   ymm2, ymm2, [lt_dff0000]
-    vpor    ymm1, ymm1, ymm2
-    vpmaddwd ymm1, ymm1, [rbp + DX_WX]  ; ряд 0: c00·(64 − fx) + c10·fx
-    vpsrld  ymm2, ymm0, 16
-    vpand   ymm2, ymm2, [lt_dff]
-    vpsrld  ymm0, ymm0, 8
-    vpand   ymm0, ymm0, [lt_dff0000]
-    vpor    ymm0, ymm0, ymm2
-    vpmaddwd ymm0, ymm0, [rbp + DX_WX]  ; ряд 1
-    vpslld  ymm0, ymm0, 16
-    vpor    ymm1, ymm1, ymm0
-    vpmaddwd ymm1, ymm1, [rbp + DX_WY]  ; ·4096, 0..255
-    vmovdqu ymm2, [rsi + r12*4 + (lbuf - albedo)]
-    vpsrld  ymm2, ymm2, 24
-    vpslld  ymm2, ymm2, 12
-    vmovdqa ymm0, [rbp + DX_OWN]
-    vpand   ymm2, ymm2, ymm0
-    vpandn  ymm0, ymm0, ymm1
-    vpor    ymm0, ymm0, ymm2
-    vpand   ymm0, ymm0, [rbp + DX_M]
+    vpcmpeqd ymm0, ymm0, ymm1
+    vcmpltps ymm1, ymm1, ymm2
+    vandnps ymm0, ymm0, ymm1
+    vandps  ymm0, ymm0, [rbp + DX_M]
+    vmovaps ymm1, [rbp + DX_OWN]
+    vandnps ymm1, ymm1, ymm0
+    vmovaps [rbp + DX_CMB], ymm1
+    vmovmskps eax, ymm1
+    test    eax, eax
+    jz      .fl2
+    vmovaps ymm5, ymm2
+    call    .gbb
+    vbroadcastss ymm0, [dl_sx]
+    vsubps  ymm0, ymm0, [rbp + DX_GX]
+    vmulps  ymm0, ymm0, [lt_pxu4]
+    vmovaps [rbp + DX_DX], ymm0         ; D = рука − пиксель, px-единицы
+    vbroadcastss ymm1, [dl_sy]
+    vsubps  ymm1, ymm1, [rbp + DX_GY]
+    vmulps  ymm1, ymm1, [lt_pxu4]
+    vmovaps [rbp + DX_DY], ymm1
+    vmovaps ymm2, [lt_handz4]
+    vsubps  ymm2, ymm2, [rbp + DX_GZ]
+    vmovaps [rbp + DX_DZ], ymm2
+    vmulps  ymm0, ymm0, ymm0
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vmulps  ymm2, ymm2, ymm2
+    vaddps  ymm0, ymm0, ymm2
+    vmaxps  ymm0, ymm0, [lt_one4]
+    vmovaps [rbp + DX_AA], ymm0
+    vmovaps ymm1, [lt_one4]
+    vdivps  ymm1, ymm1, ymm0
+    vmovaps [rbp + DX_IA], ymm1
+    vmovaps ymm0, [fl_szlv]
+    vmovaps [rbp + DX_SZL], ymm0
+.fl3:
+    bsf     eax, r11d
+    btr     r11d, eax
+    imul    eax, eax, AL_FSZ
+    lea     r9, [fl_fgl]
+    add     r9, rax
+    mov     r10d, 1
+    call    .figl
+    test    r11d, r11d
+    jnz     .fl3
+    vmovaps ymm2, ymm5
+.fl2:
+    vmovdqu ymm0, [rsi + r12*4 + (lbuf - albedo)]
+    vpsrld  ymm0, ymm0, 24
     vcvtdq2ps ymm0, ymm0
-    vmulps  ymm0, ymm0, [lt_i4096v]
+    vmulps  ymm0, ymm0, [lt_i255v]
+    vmovaps ymm1, [rbp + DX_OWN]
+    vandps  ymm0, ymm0, ymm1
+    vandnps ymm1, ymm1, ymm2
+    vorps   ymm0, ymm0, ymm1
+    vandps  ymm0, ymm0, [rbp + DX_M]
     vmulps  ymm0, ymm0, [rbp + DX_F]
     vmulps  ymm1, ymm0, [lt_flb]
     vaddps  ymm13, ymm13, ymm1
@@ -1243,6 +1356,8 @@ dl_row8:
     vmovdqu [rsi + r12*8 + (dlb - albedo) + 32], ymm1
     jmp     .next
 .gzero:
+    mov     qword [rsi + r12 + (mfsh - albedo)], -1
+.gz1:
     vpxor   ymm0, ymm0, ymm0
     vmovdqu [rsi + r12*8 + (dlb - albedo)], ymm0
     vmovdqu [rsi + r12*8 + (dlb - albedo) + 32], ymm0
@@ -1450,7 +1565,10 @@ dl_row8:
     vmulps  ymm1, ymm1, ymm2
     vaddps  ymm0, ymm0, [rbp + DX_GX]
     vaddps  ymm1, ymm1, [rbp + DX_GY]
-    vcvttps2dq ymm0, ymm0               ; точка выборки, 8.8
+    vbroadcastss ymm2, [rdi + AL_HSC]
+    vmulps  ymm0, ymm0, ymm2
+    vmulps  ymm1, ymm1, ymm2
+    vcvttps2dq ymm0, ymm0               ; точка выборки, 64 на сэмпл карты
     vcvttps2dq ymm1, ymm1
     vpand   ymm2, ymm0, [lt_d63]
     vmovdqa [rbp + DX_A], ymm2          ; доли
@@ -1546,8 +1664,452 @@ dl_row8:
 .hzr:
     ret
 
-    ; ----- фигуры у огня (rdi): капсулы на отрезке пиксель — огонь; ymm5 *= тень
+    ; ----- тень фонарика -> ymm2 (как .fls у dl_row; углы — сбором)
+.fls:
+    vbroadcastss ymm0, [dl_sx]
+    vmovaps ymm1, [rbp + DX_GX]
+    vsubps  ymm1, ymm1, ymm0            ; от руки, 8.8
+    vbroadcastss ymm0, [dl_sy]
+    vmovaps ymm2, [rbp + DX_GY]
+    vsubps  ymm2, ymm2, ymm0
+    vmulps  ymm3, ymm1, ymm1
+    vmulps  ymm4, ymm2, ymm2
+    vaddps  ymm3, ymm3, ymm4
+    vmaxps  ymm3, ymm3, [lt_1e4v]
+    vrsqrtps ymm4, ymm3
+    vmulps  ymm3, ymm3, ymm4            ; r
+    vsubps  ymm3, ymm3, [rbp + DX_MSD]
+    vmaxps  ymm3, ymm3, [lt_zero4]
+    vmulps  ymm5, ymm3, ymm4
+    vmulps  ymm1, ymm1, ymm5
+    vmulps  ymm2, ymm2, ymm5            ; точка выборки от руки
+    vmulps  ymm3, ymm3, [fl_idsv]
+    vmaxps  ymm3, ymm3, [lt_0_5v]       ; у самой руки — не в нулевом слоте
+    vminps  ymm3, ymm3, [fl_rmaxv]
+    vmovaps [rbp + DX_F0], ymm3         ; r, слоты
+    vbroadcastss ymm5, [fl_ax]
+    vbroadcastss ymm6, [fl_ay]
+    vmulps  ymm0, ymm1, ymm5
+    vmulps  ymm7, ymm2, ymm6
+    vaddps  ymm0, ymm0, ymm7            ; вдоль оси
+    vmulps  ymm2, ymm2, ymm5
+    vmulps  ymm1, ymm1, ymm6
+    vsubps  ymm2, ymm2, ymm1            ; поперёк
+    vmaxps  ymm0, ymm0, [lt_zero4]
+    vandps  ymm1, ymm2, [lt_absm]
+    vaddps  ymm0, ymm0, ymm1
+    vaddps  ymm0, ymm0, [lt_1e4v]
+    vdivps  ymm2, ymm2, ymm0            ; ромбовый угол
+    vmulps  ymm2, ymm2, [fl_kuv]
+    vaddps  ymm2, ymm2, [fl_u0v]        ; луч, дробный
+    vmaxps  ymm2, ymm2, [lt_zero4]
+    vminps  ymm2, ymm2, [fl_umaxv]
+    vcvttps2dq ymm0, ymm2
+    vcvtdq2ps ymm1, ymm0
+    vsubps  ymm2, ymm2, ymm1
+    vmovaps [rbp + DX_F1], ymm2         ; доля луча
+    vcvttps2dq ymm1, ymm3
+    vcvtdq2ps ymm4, ymm1
+    vsubps  ymm3, ymm3, ymm4
+    vmovaps [rbp + DX_F2], ymm3         ; доля слота
+    vpmaddwd ymm0, ymm0, [fl_nw]
+    vpaddd  ymm0, ymm0, ymm1
+    vpaddd  ymm0, ymm0, ymm0            ; (луч, слот) угла 00, дворды
+    vmovdqa [rbp + DX_T], ymm0
+    lea     rdx, [fl_buf]
+    call    .flr                        ; луч i
+    vmovaps [rbp + DX_F6], ymm2
+    lea     rdx, [fl_buf + FL_N*8]
+    call    .flr                        ; луч i + 1
+    vsubps  ymm2, ymm2, [rbp + DX_F6]
+    vmulps  ymm2, ymm2, [rbp + DX_F1]
+    vaddps  ymm2, ymm2, [rbp + DX_F6]
+    ret
+; луч (rdx -> fl_buf луча угла 00) -> ymm2: два слота, между ними — по доле слота
+.flr:
+    vmovdqa ymm7, [rbp + DX_T]
+    vpcmpeqd ymm0, ymm0, ymm0
+    vpxor   ymm4, ymm4, ymm4
+    vpgatherdd ymm4, [rdx + ymm7*4 + 8], ymm0   ; m, слот j + 1
+    vmovaps [rbp + DX_F3], ymm4
+    vpcmpeqd ymm0, ymm0, ymm0
+    vpxor   ymm4, ymm4, ymm4
+    vpgatherdd ymm4, [rdx + ymm7*4 + 12], ymm0  ; 1/k*
+    vmovaps [rbp + DX_F4], ymm4
+    vpcmpeqd ymm0, ymm0, ymm0
+    vpxor   ymm2, ymm2, ymm2
+    vpgatherdd ymm2, [rdx + ymm7*4], ymm0       ; m, слот j
+    vpcmpeqd ymm0, ymm0, ymm0
+    vpxor   ymm1, ymm1, ymm1
+    vpgatherdd ymm1, [rdx + ymm7*4 + 4], ymm0   ; 1/k*
+    call    .flt
+    vmovaps [rbp + DX_F5], ymm2
+    vmovaps ymm2, [rbp + DX_F3]
+    vmovaps ymm1, [rbp + DX_F4]
+    call    .flt
+    vsubps  ymm2, ymm2, [rbp + DX_F5]
+    vmulps  ymm2, ymm2, [rbp + DX_F2]
+    vaddps  ymm2, ymm2, [rbp + DX_F5]
+    ret
+; ymm2 = m, ymm1 = 1/k* -> ymm2 = доля света 0..1 (портит ymm0, ymm1, ymm4)
+.flt:
+    vmovaps ymm0, [rbp + DX_F0]
+    vmulps  ymm2, ymm2, ymm0
+    vaddps  ymm2, ymm2, [fl_hv]         ; горизонт, px
+    vmulps  ymm1, ymm1, ymm0
+    vmulps  ymm1, ymm1, [fl_szv]
+    vsubps  ymm1, ymm1, [fl_szv]        ; полутень: размер·(r/k* − 1)
+    vmaxps  ymm1, ymm1, [fl_pen0v]
+    vmovaps ymm4, [rbp + DX_GZ]
+    vsubps  ymm4, ymm4, ymm2
+    vdivps  ymm4, ymm4, ymm1
+    vaddps  ymm4, ymm4, [lt_0_5v]
+    vmaxps  ymm4, ymm4, [lt_zero4]
+    vminps  ymm2, ymm4, [lt_one4]
+    ret
+
+    ; ----- фигуры у огня (rdi): их капсулы (figsh.inc) на отрезке пиксель — огонь;
+    ; ymm5 *= тень (как .figs у dl_row; фигура, чья рамка тени мимо четвёрки, для её
+    ; дорожек под маской — у dl_row четвёрка её пропускает)
 .figs:
+    vmovaps ymm0, [rbp + DX_F]
+    vorps   ymm0, ymm0, [rbp + DX_FP]
+    vpxor   ymm1, ymm1, ymm1
+    vpcmpeqd ymm0, ymm0, ymm1
+    vcmpltps ymm1, ymm1, ymm5
+    vandnps ymm0, ymm0, ymm1
+    vandps  ymm0, ymm0, [rbp + DX_M]
+    vmovaps [rbp + DX_CMB], ymm0
+    vmovmskps eax, ymm0
+    test    eax, eax
+    jz      .fb1
+    call    .gbb
+    vmovaps ymm0, [rbp + DX_DX]
+    vmulps  ymm0, ymm0, ymm0
+    vmovaps ymm1, [rbp + DX_DY]
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vmovaps ymm1, [rbp + DX_DZ]
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vmaxps  ymm0, ymm0, [lt_one4]
+    vmovaps [rbp + DX_AA], ymm0         ; |D|²
+    vmovaps ymm1, [lt_one4]
+    vdivps  ymm1, ymm1, ymm0
+    vmovaps [rbp + DX_IA], ymm1
+    vbroadcastss ymm0, [lt_hmsz]        ; размер огня: фонарь, окно
+    cmp     dword [rdi + AL_KIND], LK_WIN
+    jne     .fs0
+    vbroadcastss ymm0, [lt_hmsz + 4]
+.fs0:
+    vmovaps [rbp + DX_SZL], ymm0
+    mov     r10d, [rdi + AL_NF]
+    lea     r9, [rdi + AL_FIG]
+; фигуры r9 (как AL_FIG: рамка тени, номер записи), r10d > 0 — сколько; дорожки — DX_CMB
+.figl:
+.fg:
+    xor     eax, eax
+    vmovss  xmm0, [rbp + DX_BB + 4]
+    vcomiss xmm0, [r9 + 8]
+    jb      .fh0
+    vmovss  xmm0, [rbp + DX_BB]
+    vcomiss xmm0, [r9 + 12]
+    ja      .fh0
+    vmovss  xmm0, [rbp + DX_BB + 12]
+    vcomiss xmm0, [r9 + 16]
+    jb      .fh0
+    vmovss  xmm0, [rbp + DX_BB + 8]
+    vcomiss xmm0, [r9 + 20]
+    ja      .fh0
+    or      eax, 1                      ; первая четвёрка
+.fh0:
+    vmovss  xmm0, [rbp + DX_BB + 16 + 4]
+    vcomiss xmm0, [r9 + 8]
+    jb      .fh1
+    vmovss  xmm0, [rbp + DX_BB + 16]
+    vcomiss xmm0, [r9 + 12]
+    ja      .fh1
+    vmovss  xmm0, [rbp + DX_BB + 16 + 12]
+    vcomiss xmm0, [r9 + 16]
+    jb      .fh1
+    vmovss  xmm0, [rbp + DX_BB + 16 + 8]
+    vcomiss xmm0, [r9 + 20]
+    ja      .fh1
+    or      eax, 2                      ; вторая
+.fh1:
+    test    eax, eax
+    jz      .fgn
+    shl     eax, 5
+    lea     r8, [lx_hmask]
+    vmovaps ymm0, [r8 + rax]            ; дорожки четвёрок, чью рамку тень задевает
+    vandps  ymm0, ymm0, [rbp + DX_CMB]
+    vmovaps [rbp + DX_CM], ymm0
+    mov     eax, [r9 + 24]
+    imul    eax, eax, SC_SZ
+    lea     rdx, [sc_buf]
+    add     rdx, rax
+    cmp     dword [rdx + SC_N], 0
+    je      .fgn
+    call    .cap
+.fgn:
+    add     r9, AL_FSZ
+    dec     r10d
+    jnz     .fg
+    ret
+
+    ; ----- тень фигуры (rdx -> запись sc_buf): .cap у dl_row по 8 дорожкам
+.cap:
+    vbroadcastss ymm0, [rdx + SC_FX]
+    vsubps  ymm0, ymm0, [rbp + DX_PX]   ; к фигуре
+    vbroadcastss ymm1, [rdx + SC_FY]
+    vsubps  ymm1, ymm1, [rbp + DX_PY]
+    vmulps  ymm2, ymm0, [rbp + DX_DX]
+    vmulps  ymm3, ymm1, [rbp + DX_DY]
+    vaddps  ymm2, ymm2, ymm3
+    vmovaps ymm3, [rbp + DX_DX]
+    vmulps  ymm3, ymm3, ymm3
+    vmovaps ymm4, [rbp + DX_DY]
+    vmulps  ymm4, ymm4, ymm4
+    vaddps  ymm3, ymm3, ymm4
+    vmaxps  ymm3, ymm3, [lt_1e4v]
+    vdivps  ymm2, ymm2, ymm3            ; t ближайшей точки
+    vxorps  ymm6, ymm6, ymm6
+    vcmpltps ymm6, ymm6, ymm2
+    vcmpleps ymm7, ymm2, [lt_one4]
+    vandps  ymm6, ymm6, ymm7
+    vandps  ymm6, ymm6, [rbp + DX_CM]
+    vmulps  ymm7, ymm2, [rbp + DX_DZ]
+    vaddps  ymm7, ymm7, [rbp + DX_GZ]   ; луч там
+    vmovss  xmm4, [rdx + SC_TOP]
+    vaddss  xmm4, xmm4, [rdx + SC_RB]
+    vbroadcastss ymm4, xmm4
+    vmulps  ymm3, ymm2, [rbp + DX_SZL]
+    vaddps  ymm4, ymm4, ymm3            ; + полутень
+    vcmpltps ymm7, ymm7, ymm4
+    vandps  ymm6, ymm6, ymm7
+    vmulps  ymm7, ymm2, [rbp + DX_DX]
+    vsubps  ymm0, ymm0, ymm7
+    vmulps  ymm0, ymm0, ymm0
+    vmulps  ymm7, ymm2, [rbp + DX_DY]
+    vsubps  ymm1, ymm1, ymm7
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1            ; сбоку²
+    vmulps  ymm1, ymm2, [rbp + DX_SZL]
+    vmovss  xmm4, [rdx + SC_RB]
+    vaddss  xmm4, xmm4, [f_1]
+    vbroadcastss ymm4, xmm4
+    vaddps  ymm1, ymm1, ymm4
+    vmulps  ymm1, ymm1, ymm1
+    vcmpltps ymm0, ymm0, ymm1
+    vandps  ymm6, ymm6, ymm0
+    vmovmskps eax, ymm6
+    test    eax, eax
+    jz      .cpr
+    vmovaps [rbp + DX_CM2], ymm6
+    vxorps  ymm0, ymm0, ymm0
+    vmovaps [rbp + DX_OM], ymm0
+    mov     ecx, [rdx + SC_N]
+    lea     r8, [rdx + SC_HSZ]
+.cp1:
+    ; отсев: прямая пиксель — огонь дальше шара капсулы у всех дорожек — доля 0
+    vbroadcastss ymm0, [r8 + SC_CX]
+    vsubps  ymm0, ymm0, [rbp + DX_PX]
+    vbroadcastss ymm1, [r8 + SC_CY]
+    vsubps  ymm1, ymm1, [rbp + DX_PY]
+    vbroadcastss ymm2, [r8 + SC_CZ]
+    vsubps  ymm2, ymm2, [rbp + DX_GZ]
+    vmulps  ymm3, ymm0, [rbp + DX_DX]
+    vmulps  ymm4, ymm1, [rbp + DX_DY]
+    vaddps  ymm3, ymm3, ymm4
+    vmulps  ymm4, ymm2, [rbp + DX_DZ]
+    vaddps  ymm3, ymm3, ymm4
+    vmulps  ymm0, ymm0, ymm0
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vmulps  ymm2, ymm2, ymm2
+    vaddps  ymm0, ymm0, ymm2
+    vmulps  ymm3, ymm3, ymm3
+    vmulps  ymm3, ymm3, [rbp + DX_IA]
+    vsubps  ymm0, ymm0, ymm3
+    vmovss  xmm1, [r8 + SC_CR]
+    vaddss  xmm1, xmm1, [rbp + DX_WM]
+    vmulss  xmm1, xmm1, xmm1
+    vbroadcastss ymm1, xmm1
+    vcmpltps ymm0, ymm0, ymm1
+    vandps  ymm0, ymm0, [rbp + DX_CM2]
+    vmovmskps eax, ymm0
+    test    eax, eax
+    jz      .cp2
+    call    .cap1
+    vmaxps  ymm0, ymm0, [rbp + DX_OM]
+    vmovaps [rbp + DX_OM], ymm0
+.cp2:
+    add     r8, SC_CSZ
+    dec     ecx
+    jnz     .cp1
+    vmovaps ymm0, [rbp + DX_OM]
+    vandps  ymm0, ymm0, [rbp + DX_CM2]
+    vmovaps ymm1, [lt_one4]
+    vsubps  ymm1, ymm1, ymm0
+    vmulps  ymm5, ymm5, ymm1
+.cpr:
+    ret
+; капсула r8 -> ymm0 = доля тени (.cap1 у dl_row); r0 — в ymm1..3
+.cap1:
+    vbroadcastss ymm0, [r8 + SC_AX]
+    vmovaps ymm1, [rbp + DX_PX]
+    vsubps  ymm1, ymm1, ymm0
+    vbroadcastss ymm0, [r8 + SC_AY]
+    vmovaps ymm2, [rbp + DX_PY]
+    vsubps  ymm2, ymm2, ymm0
+    vbroadcastss ymm0, [r8 + SC_AZ]
+    vmovaps ymm3, [rbp + DX_GZ]
+    vsubps  ymm3, ymm3, ymm0            ; r0 = пиксель − A
+    vbroadcastss ymm0, [r8 + SC_EX]
+    vmulps  ymm0, ymm0, [rbp + DX_DX]
+    vbroadcastss ymm4, [r8 + SC_EY]
+    vmulps  ymm4, ymm4, [rbp + DX_DY]
+    vaddps  ymm0, ymm0, ymm4
+    vbroadcastss ymm4, [r8 + SC_EZ]
+    vmulps  ymm4, ymm4, [rbp + DX_DZ]
+    vaddps  ymm0, ymm0, ymm4
+    vmovaps [rbp + DX_CB], ymm0         ; b = D·E
+    vmulps  ymm0, ymm1, [rbp + DX_DX]
+    vmulps  ymm4, ymm2, [rbp + DX_DY]
+    vaddps  ymm0, ymm0, ymm4
+    vmulps  ymm4, ymm3, [rbp + DX_DZ]
+    vaddps  ymm0, ymm0, ymm4
+    vmovaps [rbp + DX_CF], ymm0         ; c = D·r0
+    vbroadcastss ymm0, [r8 + SC_EX]
+    vmulps  ymm0, ymm0, ymm1
+    vbroadcastss ymm4, [r8 + SC_EY]
+    vmulps  ymm4, ymm4, ymm2
+    vaddps  ymm0, ymm0, ymm4
+    vbroadcastss ymm4, [r8 + SC_EZ]
+    vmulps  ymm4, ymm4, ymm3
+    vaddps  ymm0, ymm0, ymm4            ; f = E·r0
+    vbroadcastss ymm4, [r8 + SC_IE]
+    vmulps  ymm4, ymm4, ymm0
+    vmaxps  ymm4, ymm4, [lt_zero4]
+    vminps  ymm4, ymm4, [lt_one4]       ; s0
+    vbroadcastss ymm6, [r8 + SC_EX]
+    vmulps  ymm6, ymm6, ymm4
+    vsubps  ymm6, ymm6, ymm1
+    vmulps  ymm6, ymm6, ymm6
+    vbroadcastss ymm7, [r8 + SC_EY]
+    vmulps  ymm7, ymm7, ymm4
+    vsubps  ymm7, ymm7, ymm2
+    vmulps  ymm7, ymm7, ymm7
+    vaddps  ymm6, ymm6, ymm7
+    vbroadcastss ymm7, [r8 + SC_EZ]
+    vmulps  ymm7, ymm7, ymm4
+    vsubps  ymm7, ymm7, ymm3
+    vmulps  ymm7, ymm7, ymm7
+    vaddps  ymm6, ymm6, ymm7
+    vbroadcastss ymm7, [r8 + SC_RS2]
+    vcmpnltps ymm6, ymm6, ymm7
+    vmovaps [rbp + DX_NO], ymm6         ; не своя
+    vmulps  ymm4, ymm0, [rbp + DX_CB]
+    vbroadcastss ymm6, [r8 + SC_EE]
+    vmulps  ymm7, ymm6, [rbp + DX_CF]
+    vsubps  ymm4, ymm4, ymm7
+    vmulps  ymm6, ymm6, [rbp + DX_AA]
+    vmovaps ymm7, [rbp + DX_CB]
+    vmulps  ymm7, ymm7, ymm7
+    vsubps  ymm6, ymm6, ymm7
+    vmaxps  ymm6, ymm6, [lt_1e4v]
+    vdivps  ymm4, ymm4, ymm6
+    vmaxps  ymm4, ymm4, [lt_zero4]
+    vminps  ymm4, ymm4, [lt_one4]
+    vmulps  ymm6, ymm4, [rbp + DX_CB]
+    vaddps  ymm6, ymm6, ymm0
+    vbroadcastss ymm7, [r8 + SC_IE]
+    vmulps  ymm6, ymm6, ymm7
+    vmaxps  ymm6, ymm6, [lt_zero4]
+    vminps  ymm6, ymm6, [lt_one4]       ; s
+    vmulps  ymm4, ymm6, [rbp + DX_CB]
+    vsubps  ymm4, ymm4, [rbp + DX_CF]
+    vmulps  ymm4, ymm4, [rbp + DX_IA]
+    vmaxps  ymm4, ymm4, [lt_zero4]
+    vminps  ymm4, ymm4, [lt_one4]       ; t
+    vmulps  ymm0, ymm4, [rbp + DX_DX]
+    vaddps  ymm0, ymm0, ymm1
+    vbroadcastss ymm7, [r8 + SC_EX]
+    vmulps  ymm7, ymm7, ymm6
+    vsubps  ymm0, ymm0, ymm7
+    vmulps  ymm0, ymm0, ymm0
+    vmulps  ymm1, ymm4, [rbp + DX_DY]
+    vaddps  ymm1, ymm1, ymm2
+    vbroadcastss ymm7, [r8 + SC_EY]
+    vmulps  ymm7, ymm7, ymm6
+    vsubps  ymm1, ymm1, ymm7
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vmulps  ymm1, ymm4, [rbp + DX_DZ]
+    vaddps  ymm1, ymm1, ymm3
+    vbroadcastss ymm7, [r8 + SC_EZ]
+    vmulps  ymm7, ymm7, ymm6
+    vsubps  ymm1, ymm1, ymm7
+    vmulps  ymm1, ymm1, ymm1
+    vaddps  ymm0, ymm0, ymm1
+    vsqrtps ymm0, ymm0
+    vbroadcastss ymm1, [r8 + SC_RHO]
+    vsubps  ymm1, ymm1, ymm0            ; ρ − d
+    vmulps  ymm2, ymm4, [rbp + DX_SZL]
+    vaddps  ymm2, ymm2, [sc_w0v]        ; полутень у капсулы
+    vdivps  ymm1, ymm1, ymm2
+    vaddps  ymm1, ymm1, [lt_0_5v]
+    vmaxps  ymm1, ymm1, [lt_zero4]
+    vminps  ymm1, ymm1, [lt_one4]
+    vandps  ymm0, ymm1, [rbp + DX_NO]
+    ret
+
+    ; ----- луна: тени фигур mn_fgl -> mfsh (.mf у dl_row; дорожки — все со светом)
+.mf:
+    vmovaps ymm5, [lt_one4]
+    call    .gbb
+    vmovaps ymm0, [mn_v]
+    vmovaps [rbp + DX_DX], ymm0
+    vmovaps ymm0, [mn_v + 32]
+    vmovaps [rbp + DX_DY], ymm0
+    vmovaps ymm0, [mn_v + 64]
+    vmovaps [rbp + DX_DZ], ymm0
+    vmovaps ymm0, [mn_v + 96]
+    vmovaps [rbp + DX_AA], ymm0
+    vmovaps ymm0, [mn_v + 128]
+    vmovaps [rbp + DX_IA], ymm0
+    vmovaps ymm0, [mn_v + 160]
+    vmovaps [rbp + DX_SZL], ymm0
+    vmovaps ymm0, [rbp + DX_VAL]
+    vmovaps [rbp + DX_CMB], ymm0
+    mov     eax, [mn_wm]
+    mov     [rbp + DX_WM], eax
+    mov     eax, r13d
+    shr     eax, 4
+    mov     rdx, [rbp + DX_TMF]
+    movzx   r11d, word [rdx + rax*2]
+.mf1:
+    bsf     eax, r11d
+    btr     r11d, eax
+    imul    eax, eax, MN_FSZ
+    lea     r9, [mn_fgl]
+    add     r9, rax
+    mov     r10d, 1
+    call    .figl
+    test    r11d, r11d
+    jnz     .mf1
+    mov     eax, [sc_wmax]
+    mov     [rbp + DX_WM], eax
+    vmulps  ymm5, ymm5, [lt_255v]
+    vcvtps2dq ymm5, ymm5
+    vextracti128 xmm0, ymm5, 1
+    vpackssdw xmm5, xmm5, xmm0
+    vpackuswb xmm5, xmm5, xmm5
+    vmovq   [rsi + r12 + (mfsh - albedo)], xmm5
+    ret
+
+; рамки четвёрок по их дорожкам со светом (DX_BB, один раз на группу)
+.gbb:
     cmp     dword [rbp + DX_BBOK], 0
     jne     .fb1
     ; рамка каждой четвёрки по её дорожкам со светом (как у dl_row)
@@ -1584,128 +2146,6 @@ dl_row8:
     vmovaps [rbp + DX_BB], ymm3
     mov     dword [rbp + DX_BBOK], 1
 .fb1:
-    ; до огня по горизонтали: lh², 1/lh², lh
-    vmovaps ymm0, [rbp + DX_DX]
-    vmulps  ymm0, ymm0, ymm0
-    vmovaps ymm1, [rbp + DX_DY]
-    vmulps  ymm1, ymm1, ymm1
-    vaddps  ymm0, ymm0, ymm1
-    vmaxps  ymm0, ymm0, [lt_one4]
-    vmovaps ymm1, [lt_one4]
-    vdivps  ymm1, ymm1, ymm0
-    vmovaps [rbp + DX_A], ymm1          ; 1/lh²
-    vsqrtps ymm0, ymm0
-    vmovaps [rbp + DX_B], ymm0          ; lh
-    mov     ecx, [rdi + AL_NF]
-    lea     rdx, [rdi + AL_FIG]
-.fg:
-    ; рамка тени фигуры мимо четвёрки — фигура не её (у dl_row четвёрка её пропускает)
-    xor     eax, eax
-    vmovss  xmm0, [rbp + DX_BB + 4]
-    vcomiss xmm0, [rdx + 8]
-    jb      .fh0
-    vmovss  xmm0, [rbp + DX_BB]
-    vcomiss xmm0, [rdx + 12]
-    ja      .fh0
-    vmovss  xmm0, [rbp + DX_BB + 12]
-    vcomiss xmm0, [rdx + 16]
-    jb      .fh0
-    vmovss  xmm0, [rbp + DX_BB + 8]
-    vcomiss xmm0, [rdx + 20]
-    ja      .fh0
-    or      eax, 1                      ; первая четвёрка
-.fh0:
-    vmovss  xmm0, [rbp + DX_BB + 16 + 4]
-    vcomiss xmm0, [rdx + 8]
-    jb      .fh1
-    vmovss  xmm0, [rbp + DX_BB + 16]
-    vcomiss xmm0, [rdx + 12]
-    ja      .fh1
-    vmovss  xmm0, [rbp + DX_BB + 16 + 12]
-    vcomiss xmm0, [rdx + 16]
-    jb      .fh1
-    vmovss  xmm0, [rbp + DX_BB + 16 + 8]
-    vcomiss xmm0, [rdx + 20]
-    ja      .fh1
-    or      eax, 2                      ; вторая
-.fh1:
-    test    eax, eax
-    jz      .fgn
-    shl     eax, 5
-    lea     r8, [lx_hmask]
-    vmovaps ymm7, [r8 + rax]            ; дорожки четвёрок, чью рамку тень задевает
-    vbroadcastss ymm0, [rdx]
-    vsubps  ymm0, ymm0, [rbp + DX_GX]
-    vmulps  ymm0, ymm0, [lt_pxu4]       ; до фигуры
-    vbroadcastss ymm1, [rdx + 4]
-    vsubps  ymm1, ymm1, [rbp + DX_GY]
-    vmulps  ymm1, ymm1, [lt_pxu4]
-    vmulps  ymm2, ymm0, ymm0
-    vmulps  ymm3, ymm1, ymm1
-    vaddps  ymm2, ymm2, ymm3
-    vmovaps ymm3, [lt_16v]
-    vcmpltps ymm3, ymm3, ymm2           ; не сама фигура и не у её ног
-    vandps  ymm7, ymm7, ymm3
-    vandps  ymm7, ymm7, [rbp + DX_M]
-    ; t — где отрезок ближе всего к ней
-    vmulps  ymm2, ymm0, [rbp + DX_DX]
-    vmulps  ymm3, ymm1, [rbp + DX_DY]
-    vaddps  ymm2, ymm2, ymm3
-    vmulps  ymm2, ymm2, [rbp + DX_A]    ; t
-    vmovaps ymm3, [lt_0_02v]
-    vcmpltps ymm3, ymm3, ymm2
-    vandps  ymm7, ymm7, ymm3
-    vcmpltps ymm3, ymm2, [lt_one4]
-    vandps  ymm7, ymm7, ymm3
-    ; высота луча там, рост
-    vmovaps ymm4, [rbp + DX_DZ]
-    vmulps  ymm4, ymm4, ymm2
-    vaddps  ymm4, ymm4, [rbp + DX_GZ]
-    vmovaps ymm3, [lt_figh4]
-    vsubps  ymm3, ymm3, ymm4            ; рост − высота луча
-    vmovaps ymm4, [lt_m2v]
-    vcmpltps ymm4, ymm4, ymm3
-    vandps  ymm7, ymm7, ymm4
-    ; поперёк
-    vmovaps ymm4, [rbp + DX_DX]
-    vmulps  ymm4, ymm4, ymm2
-    vsubps  ymm0, ymm0, ymm4
-    vmovaps ymm4, [rbp + DX_DY]
-    vmulps  ymm4, ymm4, ymm2
-    vsubps  ymm1, ymm1, ymm4
-    vmulps  ymm0, ymm0, ymm0
-    vmulps  ymm1, ymm1, ymm1
-    vaddps  ymm0, ymm0, ymm1
-    vcmpltps ymm4, ymm0, [lt_100v]
-    vandps  ymm7, ymm7, ymm4
-    vmovmskps eax, ymm7
-    test    eax, eax
-    jz      .fgn
-    vsqrtps ymm0, ymm0                  ; поперёк
-    vmulps  ymm2, ymm2, [rbp + DX_B]
-    vmulps  ymm2, ymm2, [lt_0_05v]
-    vaddps  ymm2, ymm2, [lt_1_2v]       ; полутень растёт от фигуры к пикселю
-    vmovaps ymm1, [lt_figr4]
-    vaddps  ymm1, ymm1, ymm2
-    vsubps  ymm1, ymm1, ymm0
-    vaddps  ymm2, ymm2, ymm2
-    vdivps  ymm1, ymm1, ymm2
-    vmaxps  ymm1, ymm1, [lt_zero4]
-    vminps  ymm1, ymm1, [lt_one4]
-    vmulps  ymm3, ymm3, [lt_0_25v]
-    vaddps  ymm3, ymm3, [lt_0_5v]
-    vmaxps  ymm3, ymm3, [lt_zero4]
-    vminps  ymm3, ymm3, [lt_one4]
-    vmulps  ymm1, ymm1, ymm3
-    vmulps  ymm1, ymm1, [lt_figkv]
-    vandps  ymm1, ymm1, ymm7
-    vmovaps ymm0, [lt_one4]
-    vsubps  ymm0, ymm0, ymm1
-    vmulps  ymm5, ymm5, ymm0
-.fgn:
-    add     rdx, AL_FSZ
-    dec     ecx
-    jnz     .fg
     ret
 
 ; AVX2 есть и включён у ОС (XCR0: XMM и YMM) -> have_avx2 = 1; --noavx — не брать

@@ -25,19 +25,21 @@ render:
     call    interior_frame              ; у каких изб видно нутро (interior.inc)
     call    build_ntab                  ; луна и небо по нормалям
     call    moon_grid                   ; облака
-    ; тени луны и маска позёмки нужны только свету (и частицам): фоном, на своём
-    ; потоке, пока идут сетка света, пол, объекты и крыши (им развёртка не нужна)
+    call    dl_frame                    ; огни кадра по плиткам экрана (lights.inc)
+    ; тени луны, маска позёмки, лучи тени фонарика нужны только свету (и частицам):
+    ; фоном, на своём потоке, пока идут сетка света, пол, объекты и крыши
     lea     rcx, [sky_job]
     call    bg_go
     PROF    12
     call    build_flash_occ
     call    compute_lightgrid
-    call    dl_frame                    ; огни кадра по плиткам экрана (lights.inc)
     PROF    1
     call    floor_pass
     call    ifloor_pass                 ; крашеные доски и половики в избах без крыши
     PROF    2
     call    fig_prep                    ; позы фигур кадра -> капсулы (fig.inc)
+    call    sc_prep                     ; и их тени (figsh.inc)
+    call    mn_prep                     ; и под луной
     ; объекты и крыши (поверх, с тестом глубины) — полосами экрана на всех ядрах
     lea     rcx, [obj_job]
     mov     edx, NBANDS
@@ -77,13 +79,18 @@ render:
     pop     rbx
     ret
 
-; фоновое задание кадра: развёртка теней луны, маска позёмки (время — в sky_ticks)
+; фоновое задание кадра: развёртка теней луны, маска позёмки, лучи тени фонарика
+; (время — в sky_ticks)
 sky_job:
     sub     rsp, 40
     lea     rcx, [sky_t0]
     call    [QueryPerformanceCounter]
     call    sky_sweep                   ; тени луны по высотам (+ облака в ячейках)
     call    build_wgrid                 ; где у земли метёт — маска позёмки
+    cmp     dword [dl_fon], 0
+    je      .nofl
+    call    fl_map                      ; веер лучей из руки (hz16.inc)
+.nofl:
     lea     rcx, [sky_t1]
     call    [QueryPerformanceCounter]
     mov     rax, [sky_t1]
@@ -1367,7 +1374,64 @@ light_rows:
     paddd   xmm1, xmm9
     movd    r15d, xmm1
     shr     r15d, 10                    ; дошло луны 0..255
+    movzx   eax, byte [rsi + rcx + (mfsh - albedo)]
+    inc     eax
+    imul    r15d, eax
+    shr     r15d, 8                     ; и мимо фигур (dl_row)
 .nomoon:
+    ; AO у земли (ao16.inc): билинейно у точки; к AO_ZF px на нет -> xmm6 = (m, m, m,
+    ; 256), m 0..256 (свой свет — без него)
+    movq    xmm6, [lt_w256]
+    cmp     r14d, AO_ZF
+    jge     .noao
+    test    byte [rsi + rcx + (nbuf - albedo)], NOWN
+    jnz     .noao
+    lea     eax, [r12d - 16]
+    lea     edx, [r13d - 16]
+    cmp     eax, AOLIM
+    cmova   eax, [ao_lim]
+    cmp     edx, AOLIM
+    cmova   edx, [ao_lim]
+    mov     [rsp + 16], eax
+    and     eax, 31
+    movq    xmm9, [rsi + rax*8 + (wt8x - albedo)]
+    mov     eax, edx
+    and     edx, 31
+    movq    xmm8, [rsi + rdx*8 + (wt8y - albedo)]
+    pmullw  xmm8, xmm9                  ; веса 2x2, в сумме 1024
+    shr     eax, 5
+    shl     eax, 10                     ; · AOW
+    mov     edx, [rsp + 16]
+    shr     edx, 5
+    add     eax, edx
+    movzx   edx, word [rsi + rax + (ao16 - albedo) + AOW]
+    movzx   eax, word [rsi + rax + (ao16 - albedo)]
+    shl     edx, 16
+    or      eax, edx
+    movd    xmm9, eax
+    punpcklbw xmm9, xmm15
+    pmaddwd xmm9, xmm8
+    pshufd  xmm8, xmm9, 1
+    paddd   xmm9, xmm8
+    movd    eax, xmm9
+    shr     eax, 10                     ; AO 0..255
+    mov     edx, eax
+    shr     edx, 7
+    add     eax, edx                    ; 0..256
+    neg     eax
+    add     eax, 256
+    mov     edx, AO_ZF
+    sub     edx, r14d
+    cmp     edx, AO_ZF
+    cmovg   edx, [ao_zf]                ; ниже земли — целиком
+    imul    eax, edx
+    shr     eax, 5
+    neg     eax
+    add     eax, 256
+    movd    xmm6, eax
+    pshuflw xmm6, xmm6, 0
+    pinsrw  xmm6, [lt_w256], 3          ; видимость — как есть
+.noao:
     sub     r12d, r10d
     sub     r13d, r11d
     xor     eax, eax
@@ -1419,6 +1483,8 @@ light_rows:
     psrlw   xmm0, 6                     ; L: B,G,R,видимость
     movq    xmm7, [rsi + r12*8 + (amb_d - albedo)]
     psubusw xmm0, xmm7                  ; грань видит меньше неба
+    pmullw  xmm0, xmm6
+    psrlw   xmm0, 8                     ; и низ у стен, заборов, стволов — AO
     jmp     .moon
 .own:
     and     r12d, 0x7F

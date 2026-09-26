@@ -3610,6 +3610,8 @@ vg_render:
 .h3:
     test    r12d, r12d
     jz      .h9
+    cmp     byte [rbx + 20], VK_PLAIN
+    je      .hn                         ; верёвка, уголь, изолятор — тени тоньше пикселя
     movss   xmm3, [rbx + 12]
     ; клетки k: (k − c)·0.70711 в [x − r, x + r]
     movss   xmm0, [rbx]
@@ -3705,6 +3707,8 @@ vg_render:
     imul    eax, r12d, VX_SZ
     lea     rbx, [vg_shp]
     add     rbx, rax
+    cmp     byte [rbx + 20], VK_PLAIN
+    je      .gn                         ; верёвка: иначе в карте высот — стенка на столбах
     call    .xybox
     subss   xmm4, [vk_0_4]
     addss   xmm5, [vk_0_4]

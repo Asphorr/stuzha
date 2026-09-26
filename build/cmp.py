@@ -9,7 +9,7 @@ import numpy as np
 
 BLD = os.path.dirname(os.path.abspath(__file__))
 REF = os.path.join(BLD, "ref")
-SHOTS = list("1234567890wbzf") + ["1i", "bi", "6i"]
+SHOTS = list("1234567890wbzfg") + ["1i", "bi", "6i"]
 EXE = sys.argv[sys.argv.index("--exe") + 1] if "--exe" in sys.argv else "stuzha.exe"
 
 def load(p):

@@ -31,6 +31,7 @@ new_game:
     call    calc_static_light
     call    dl_bake                     ; огни попиксельно: точки, окна, карты горизонта
     call    calc_ao
+    call    calc_ao16                   ; и попиксельный — по высотам 16 на тайл
     call    gen_drifts
     xor     eax, eax
     lea     rdi, [parts]
