@@ -958,6 +958,7 @@ br_t:       dd 1.0
 dp_kind:    dd 0
 dp_depth:   dd 0
 dp_a:       dd 0
+pp_n:       dd 0                        ; частиц к рисованию (pp_buf)
 dp_r:       dd 0.0
 dc_depth:   dd 0
 dw_ax:      dd 0
@@ -1228,6 +1229,8 @@ hflags:     resb MAPW*MAPW
 ; частицы и постобработка
 alignb 16
 parts:      resb MAXP*P_SZ
+pp_buf:     resb MAXP*32                ; к рисованию: sx, sy, предел глубины, сила,
+                                        ; 1/(r + 0.5)², радиус, цвет словами
 blA:        resq BLW*BLH
 blB:        resq BLW*BLH
 lamps:      resd MAXLAMP

@@ -787,6 +787,7 @@ draw_parts:
     lea     rbx, [parts]
     mov     r15d, MAXP
     pxor    xmm15, xmm15
+    mov     dword [pp_n], 0
 .l:
     movzx   eax, byte [rbx + P_KIND]
     test    eax, eax
@@ -1010,14 +1011,79 @@ draw_parts:
     divss   xmm6, xmm1
     cvttss2si ebp, [dp_r]
     inc     ebp
+    ; в список: рисуют потоки пула полосами строк (parts_rows) — каждый все частицы
+    ; по порядку, но в своих строках: у пикселя те же смешивания в том же порядке
+    mov     eax, [pp_n]
+    inc     dword [pp_n]
+    shl     eax, 5
+    lea     rdx, [pp_buf]
+    add     rdx, rax
+    mov     [rdx], esi                  ; sx
+    mov     [rdx + 4], edi              ; sy
+    mov     eax, [dp_depth]
+    add     eax, 96
+    mov     [rdx + 8], eax              ; предел глубины
+    mov     eax, [dp_a]
+    mov     [rdx + 12], eax
+    movss   [rdx + 16], xmm6            ; 1 / (r + 0.5)²
+    mov     [rdx + 20], ebp             ; радиус, px
+    movq    [rdx + 24], xmm4            ; цвет словами
+.n:
+    add     rbx, P_SZ
+    dec     r15d
+    jnz     .l
+    lea     rcx, [parts_rows]
+    mov     edx, SCR_H
+    mov     r8d, 16
+    call    par_for
+    add     rsp, 40
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rdi
+    pop     rsi
+    pop     rbx
+    ret
+
+; строки кадра ecx .. edx−1 (с любого потока пула): частицы pp_buf по порядку — диском
+; с альфой к краю, за тем, что ближе к глазу, не видно (как было в draw_parts)
+parts_rows:
+    push    rbx
+    push    rsi
+    push    rdi
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+    mov     r14d, ecx
+    mov     r15d, edx
+    pxor    xmm15, xmm15
+    lea     rbx, [pp_buf]
+    mov     r10d, [pp_n]
+    mov     r11, [fbbits]
+    lea     r8, [gposb]
+.p:
+    test    r10d, r10d
+    jz      .out
+    mov     esi, [rbx]                  ; sx
+    mov     edi, [rbx + 4]              ; sy
+    mov     ebp, [rbx + 20]             ; радиус
+    movss   xmm6, [rbx + 16]
+    movq    xmm4, [rbx + 24]
+    cvtsi2ss xmm7, dword [rbx + 12]     ; сила
     mov     r12d, ebp
     neg     r12d                        ; dy
 .dy:
     cmp     r12d, ebp
-    jg      .n
+    jg      .pn
     lea     eax, [edi + r12d]
-    cmp     eax, SCR_H
-    jae     .dyn
+    cmp     eax, r14d
+    jl      .dyn                        ; выше полосы
+    cmp     eax, r15d
+    jge     .pn                         ; ниже — дальше строки только ниже
     imul    r9d, eax, SCR_W
     mov     r13d, ebp
     neg     r13d                        ; dx
@@ -1039,20 +1105,16 @@ draw_parts:
     comiss  xmm1, [f_0]
     jbe     .dxn
     add     eax, r9d
-    lea     rdx, [gposb]
-    mov     ecx, [rdx + rax*4]
+    mov     ecx, [r8 + rax*4]
     movzx   edx, cx
     shr     ecx, 16
     add     ecx, edx
-    mov     edx, [dp_depth]
-    add     edx, 96
-    cmp     ecx, edx
+    cmp     ecx, [rbx + 8]
     jg      .dxn
-    cvtsi2ss xmm0, dword [dp_a]
+    movaps  xmm0, xmm7
     mulss   xmm0, xmm1
     cvttss2si ecx, xmm0                 ; 0..128
-    mov     rdx, [fbbits]
-    movd    xmm0, [rdx + rax*4]
+    movd    xmm0, [r11 + rax*4]
     punpcklbw xmm0, xmm15
     movdqa  xmm1, xmm4
     psubw   xmm1, xmm0
@@ -1062,18 +1124,18 @@ draw_parts:
     psraw   xmm1, 7
     paddw   xmm0, xmm1
     packuswb xmm0, xmm0
-    movd    [rdx + rax*4], xmm0
+    movd    [r11 + rax*4], xmm0
 .dxn:
     inc     r13d
     jmp     .dx
 .dyn:
     inc     r12d
     jmp     .dy
-.n:
-    add     rbx, P_SZ
-    dec     r15d
-    jnz     .l
-    add     rsp, 40
+.pn:
+    add     rbx, 32
+    dec     r10d
+    jmp     .p
+.out:
     pop     rbp
     pop     r15
     pop     r14
