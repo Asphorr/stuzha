@@ -180,6 +180,7 @@ V4 lt_zero4, 0.0
 V4 lt_1e4v, 0.0001
 V4 lt_big4, 1.0e9
 V4 lt_mbig4, -1.0e9
+lt_dsgn:    times 8 dd 0x80000000       ; сдвиг знака: порядок со знаком -> без знака
 V4 lt_16v, 16.0
 V4 lt_0_02v, 0.02
 V4 lt_figh4, 27.0
@@ -1491,6 +1492,43 @@ al_figs:
 ; достаёт, снимается с маски; окно — ещё и если вся плитка по ту сторону стены;
 ; флаг плитки — достаёт ли фонарик
 DTL_END     equ 64
+; рамка плитки (AVX2): 8 пикселей с rbp + %1 в максимумы ymm0..5 (см. .tx8)
+%macro DTB8 1
+    vmovdqu ymm11, [rsi + rbp*4 + %1*4]
+    vpxor   ymm12, ymm12, ymm12
+    vpcmpgtd ymm7, ymm11, ymm12         ; есть свет (не пустота, не эмиссия)
+    vpor    ymm13, ymm13, ymm7
+    vmovdqu ymm8, [rsi + rbp*4 + (gposb - albedo) + %1*4]
+    vpand   ymm9, ymm8, [lx_dffff]      ; x
+    vpsrld  ymm8, ymm8, 16              ; y
+    vpaddd  ymm10, ymm9, ymm8
+    vpsubd  ymm10, ymm10, ymm15
+    vpsrad  ymm10, ymm10, 5
+    vpaddd  ymm10, ymm10, ymm14
+    vpxor   ymm10, ymm10, [lt_dsgn]     ; z со сдвигом знака
+    vpand   ymm6, ymm9, ymm7
+    vpmaxud ymm1, ymm1, ymm6
+    vpandn  ymm6, ymm9, ymm7
+    vpmaxud ymm0, ymm0, ymm6
+    vpand   ymm6, ymm8, ymm7
+    vpmaxud ymm3, ymm3, ymm6
+    vpandn  ymm6, ymm8, ymm7
+    vpmaxud ymm2, ymm2, ymm6
+    vpand   ymm6, ymm10, ymm7
+    vpmaxud ymm5, ymm5, ymm6
+    vpandn  ymm6, ymm10, ymm7
+    vpmaxud ymm4, ymm4, ymm6
+%endmacro
+; ymm%1 -> xmm%1: наибольшее из 8 без знака — во всех дорожках
+%macro DTMAX 1
+    vextracti128 xmm6, ymm%1, 1
+    vpmaxud xmm%1, xmm%1, xmm6
+    vpshufd xmm6, xmm%1, 0x4E
+    vpmaxud xmm%1, xmm%1, xmm6
+    vpshufd xmm6, xmm%1, 0xB1
+    vpmaxud xmm%1, xmm%1, xmm6
+%endmacro
+
 dl_tiles:
     push    rbx
     push    rsi
@@ -1511,6 +1549,8 @@ dl_tiles:
 .ty:
     xor     r13d, r13d                  ; столбец плиток
 .tx:
+    cmp     dword [have_avx2], 0
+    jne     .tx8
     movaps  xmm0, [lt_big4]             ; min x, max x, min y, max y, min z, max z
     movaps  xmm1, [lt_mbig4]
     movaps  xmm2, xmm0
@@ -1609,6 +1649,7 @@ dl_tiles:
     maxps   xmm5, xmm6
     pshufd  xmm6, xmm5, 1
     maxss   xmm5, xmm6
+.bb:
     imul    eax, r12d, DT_W
     add     eax, r13d
     mov     r15d, eax                   ; плитка
@@ -1935,6 +1976,66 @@ dl_tiles:
 .empty:
     xor     ebx, ebx
     xor     r10d, r10d
+    jmp     .st
+
+    ; ----- рамка плитки на AVX2: по 8 пикселей, в целых (x, y ≤ 32767, z мал — перевод
+    ; в f32 точен и монотонен, min/max те же). Всё — максимумами без знака: max x —
+    ; max(x & свет), min x — ~max(~x & свет); пустые дают 0 и не решают; z — со сдвигом
+    ; знака (порядок со знаком -> без знака). Нет ни одного со светом — рамка «пустая»
+.tx8:
+    mov     ebx, r12d
+    shl     ebx, 4
+    lea     r14d, [ebx + 16]
+    mov     eax, SCR_H
+    cmp     r14d, eax
+    cmova   r14d, eax
+    vpxor   ymm0, ymm0, ymm0            ; ~min x
+    vpxor   ymm1, ymm1, ymm1            ; max x
+    vpxor   ymm2, ymm2, ymm2
+    vpxor   ymm3, ymm3, ymm3
+    vpxor   ymm4, ymm4, ymm4
+    vpxor   ymm5, ymm5, ymm5
+    vpxor   ymm13, ymm13, ymm13         ; есть ли свет
+    vpbroadcastd ymm15, xmm15           ; camx + camy
+.py8:
+    imul    ebp, ebx, SCR_W
+    mov     eax, r13d
+    shl     eax, 4
+    add     ebp, eax
+    mov     eax, CY0
+    sub     eax, ebx
+    vmovd   xmm14, eax
+    vpbroadcastd ymm14, xmm14
+    DTB8    0
+    DTB8    8
+    inc     ebx
+    cmp     ebx, r14d
+    jb      .py8
+    DTMAX   0
+    DTMAX   1
+    DTMAX   2
+    DTMAX   3
+    DTMAX   4
+    DTMAX   5
+    vpcmpeqd xmm6, xmm6, xmm6
+    vpxor   xmm0, xmm0, xmm6            ; min x
+    vpxor   xmm2, xmm2, xmm6
+    vpxor   xmm4, xmm4, xmm6
+    vpxor   xmm4, xmm4, [lt_dsgn]       ; z — назад со знаком
+    vpxor   xmm5, xmm5, [lt_dsgn]
+    vcvtdq2ps xmm0, xmm0
+    vcvtdq2ps xmm1, xmm1
+    vcvtdq2ps xmm2, xmm2
+    vcvtdq2ps xmm3, xmm3
+    vcvtdq2ps xmm4, xmm4
+    vcvtdq2ps xmm5, xmm5
+    vptest  ymm13, ymm13
+    jnz     .tx8d
+    vmovss  xmm0, [lt_big4]             ; света нет: min > max
+    vmovss  xmm1, [lt_mbig4]
+.tx8d:
+    vzeroupper
+    jmp     .bb
 .st:
     lea     rdx, [dl_tm]
     mov     [rdx + r15*8], rbx

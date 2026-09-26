@@ -377,6 +377,19 @@ gen_map:
     call    veg_extra                   ; подрост, ивняк, бурьян, пни
     call    veg_assign                  ; вариант, сдвиг, зеркало — каждому растению
     call    prop_assign                 ; и каждой мелочи двора (фонарю — огонь у лампы)
+    ; свойства тайла по карте — одной выборкой (пол на AVX2: один сбор вместо двух
+    ; зависимых); tmap дальше не меняется
+    lea     rsi, [tmap]
+    lea     rdi, [fk_map]
+    lea     rdx, [tprop]
+    xor     ecx, ecx
+.fk:
+    movzx   eax, byte [rsi + rcx]
+    movzx   eax, byte [rdx + rax]
+    mov     [rdi + rcx], al
+    inc     ecx
+    cmp     ecx, MAPW*MAPW
+    jb      .fk
     add     rsp, 40
     pop     rbp
     pop     r15

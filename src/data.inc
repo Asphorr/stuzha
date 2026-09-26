@@ -1171,6 +1171,7 @@ blood:      resb DECW*DECW
 vign:       resb SCR_W*SCR_H
 grain:      resb 65536
 tmap:       resb MAPW*MAPW
+fk_map:     resb MAPW*MAPW + 4          ; tprop[tmap] (+ хвост под сбор дворда)
 opq:        resb MAPW*MAPW
 opq_df:     resb MAPW*MAPW              ; до ближайшего непрозрачного, тайлы (build_opq_df)
 alignb 8

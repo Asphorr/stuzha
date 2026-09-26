@@ -942,12 +942,8 @@ floor_rows_x:
     vpand   ymm3, ymm3, ymm2            ; пустоте — тайл 0
     vpcmpeqd ymm5, ymm5, ymm5
     vpxor   ymm4, ymm4, ymm4
-    vpgatherdd ymm4, [rbx + ymm3*1 + (tmap - albedo)], ymm5
+    vpgatherdd ymm4, [rbx + ymm3*1 + (fk_map - albedo)], ymm5   ; tprop[tmap] — одним сбором
     vpand   ymm4, ymm4, [fl_255]
-    vpcmpeqd ymm5, ymm5, ymm5
-    vpxor   ymm3, ymm3, ymm3
-    vpgatherdd ymm3, [r14 + ymm4*1], ymm5
-    vpand   ymm4, ymm3, [fl_255]
     vpsrld  ymm4, ymm4, 4
     vpxor   ymm5, ymm5, ymm5
     vpcmpeqd ymm5, ymm5, ymm4           ; снег
