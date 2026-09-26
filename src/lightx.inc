@@ -48,6 +48,29 @@ lx_dm1:   times 8 dd -1
 lx_d16:   times 8 dd 16
 lx_daolim: times 8 dd AOLIM
 lx_bw01:  times 2 db 0,-1,1,-1, 4,-1,5,-1, 8,-1,9,-1, 12,-1,13,-1   ; байты 0, 1 дворда -> слова
+; раздача числа пикселя (дворд в ymm: пиксели 0..3 | 4..7) по 4 словам пикселя одним
+; внутриполосным vpshufb: половина A — пиксели 0, 1 | 4, 5, B — 2, 3 | 6, 7 (+32)
+lx_pw0:   times 2 db 0,1,0,1,0,1,0,1, 4,5,4,5,4,5,4,5         ; слово 0 дворда
+          times 2 db 8,9,8,9,8,9,8,9, 12,13,12,13,12,13,12,13
+lx_pw2:   times 2 db 2,3,2,3,2,3,2,3, 6,7,6,7,6,7,6,7         ; слово 1 дворда
+          times 2 db 10,11,10,11,10,11,10,11, 14,15,14,15,14,15,14,15
+lx_pao:   times 2 db 0,1,0,1,0,1,2,3, 4,5,4,5,4,5,6,7         ; (m, m, m, 256)
+          times 2 db 8,9,8,9,8,9,10,11, 12,13,12,13,12,13,14,15
+lx_p8:    times 2 db -1,0,-1,0,-1,0,-1,0, -1,4,-1,4,-1,4,-1,4 ; байт 0 -> старший байт слов
+          times 2 db -1,8,-1,8,-1,8,-1,8, -1,12,-1,12,-1,12,-1,12
+lx_pa3:   times 2 db 3,3,3,3,3,3,3,3, 7,7,7,7,7,7,7,7         ; байт 3 (флаги) -> все байты
+          times 2 db 11,11,11,11,11,11,11,11, 15,15,15,15,15,15,15,15
+lx_pq8:   db -1,0,-1,0,-1,0,-1,0, -1,1,-1,1,-1,1,-1,1          ; 8 байт (в обеих половинах):
+          db -1,4,-1,4,-1,4,-1,4, -1,5,-1,5,-1,5,-1,5          ; байт пикселя -> старший байт
+          db -1,2,-1,2,-1,2,-1,2, -1,3,-1,3,-1,3,-1,3
+          db -1,6,-1,6,-1,6,-1,6, -1,7,-1,7,-1,7,-1,7
+lx_rot1:  times 2 db 2,3,4,5,0,1,6,7, 10,11,12,13,8,9,14,15    ; G R B A
+lx_rot2:  times 2 db 4,5,0,1,2,3,6,7, 12,13,8,9,10,11,14,15    ; R B G A
+lx_plum:  times 2 db -1,1,-1,1,-1,1,-1,1, -1,9,-1,9,-1,9,-1,9 ; байт 1 дворда -> старший байт
+lx_gray64: times 4 dw 64, 128, 64, 0
+lx_dw64:  times 8 dd 0x00400040
+lx_dao0:  times 8 dd 0x01000100             ; AO нет: m = 256 | 256 << 16
+lx_dao1:  times 8 dd 0x01000000
 lx_hmask: times 8 dd 0                  ; dl_row8: дорожки четвёрок по битам 1, 2
           times 4 dd -1
           times 4 dd 0
@@ -87,16 +110,21 @@ LX_FY    equ 672
 LX_SIDX  equ 704
 LX_MV    equ 736                        ; луна дошла, 0..255
 LX_OWN   equ 768                        ; свой свет (маска)
-LX_N2    equ 800                        ; индекс нормали для amb_d, moon_n
+LX_N2P   equ 800                        ; индекс нормали для amb_d, moon_n: 0, 1, 4, 5 | 2, 3, 6, 7
 LX_D     equ 832                        ; доля позёмки, 0..60
-LX_VG    equ 864                        ; виньетка
+LX_VG    equ 864                        ; виньетка: 8 байт, в обеих половинах
 LX_GR    equ 896                        ; зерно (со знаком)
 LX_S00   equ 928                        ; 4 сэмпла сетки света
 LX_S01   equ 960
 LX_S10   equ 992
 LX_S11   equ 1024
-LX_AO    equ 1056                       ; AO у земли: множитель 0..256
-LX_SZ    equ 1088
+LX_AO    equ 1056                       ; AO у земли: множитель 0..256 | 256 << 16
+LX_WXY   equ 1088                       ; веса билинейки байтами: 64 − fx, fx, 64 − fy, fy
+LX_MEMT2 equ 1120                       ; «память»·2 словами
+LX_XA    equ 1152                       ; половина A цвета
+LX_DLB   equ 1184                       ; свет огней строки от dl_row8 (A, B по группам)
+LX_MFS   equ LX_DLB + SCR_W*8           ; луна мимо фигур, строка
+LX_SZ    equ LX_MFS + SCR_W
 
 ; число в xmm (дворд на пиксель) -> ymm: в каждое слово пикселя
 %macro LXBC 2
@@ -108,6 +136,7 @@ LX_SZ    equ 1088
 ; ymm14 = z + 64, сумма — в ymm15
 %macro LXCELL 2
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm12, ymm12, ymm12                 ; сбор читает приёмник: рвём зависимость
     vpgatherdd ymm12, [rsi + ymm8*4 + (mz8 - albedo) + %1], ymm7
     vpand   ymm13, ymm12, [lx_dff]              ; горизонт + 64
     vpsubd  ymm13, ymm14, ymm13
@@ -125,72 +154,82 @@ LX_SZ    equ 1088
     vpaddd  ymm15, ymm15, ymm13
 %endmacro
 
-; цвет 4 пикселей группы: %1 = 0 — первые, 1 — вторые
+; цвет группы половинами по дорожкам: %1 = 0 — пиксели 0, 1 | 4, 5 (A), 1 — 2, 3 | 6, 7
+; (B). Так число пикселя (дворд) раздаётся по его 4 словам одним внутриполосным vpshufb
+; (таблица + 32·%1), байты — распаковкой, а vpackuswb A, B кладёт 8 пикселей подряд.
+; Операции над словами — те же, что в light_rows; где сделано иначе, итог тот же:
+; билинейка — vpmaddubsw (пары байтов на пары весов ≤ 64, суммы ≤ 16320 — без насыщения),
+; «x·b >> 8» при x·b < 65536 — vpmulhuw(x, b << 8), где b << 8 даёт сам vpshufb (байт —
+; в старший байт слова)
 %macro LXHALF 1
-    ; сетка света: билинейно по 4 сэмплам
-    vpmovzxbw ymm10, [rsp + LX_S00 + 16*%1]
-    vpmovzxbw ymm11, [rsp + LX_S01 + 16*%1]
-    vpmovzxbw ymm12, [rsp + LX_S10 + 16*%1]
-    vpmovzxbw ymm13, [rsp + LX_S11 + 16*%1]
-    vmovdqa xmm8, [rsp + LX_FX + 16*%1]
-    LXBC    ymm8, xmm8                  ; fx
-    vmovdqa ymm14, [lx_w64]
-    vpsubw  ymm14, ymm14, ymm8          ; 64 − fx
-    vpmullw ymm10, ymm10, ymm14
-    vpmullw ymm11, ymm11, ymm8
-    vpaddw  ymm10, ymm10, ymm11
-    vpsrlw  ymm10, ymm10, 6             ; верхний ряд
-    vpmullw ymm12, ymm12, ymm14
-    vpmullw ymm13, ymm13, ymm8
-    vpaddw  ymm12, ymm12, ymm13
-    vpsrlw  ymm12, ymm12, 6             ; нижний
-    vmovdqa xmm9, [rsp + LX_FY + 16*%1]
-    LXBC    ymm9, xmm9                  ; fy
-    vmovdqa ymm14, [lx_w64]
-    vpsubw  ymm14, ymm14, ymm9
-    vpmullw ymm10, ymm10, ymm14
-    vpmullw ymm12, ymm12, ymm9
-    vpaddw  ymm10, ymm10, ymm12
-    vpsrlw  ymm10, ymm10, 6             ; L: B, G, R, видимость
-    vmovdqa xmm7, [rsp + LX_N2 + 16*%1]
+    vpxor   ymm13, ymm13, ymm13
+    ; сетка света: ряды (s00, s01)·(64 − fx, fx), потом (верх, низ)·(64 − fy, fy)
+    vmovdqa ymm10, [rsp + LX_S00]
+    vmovdqa ymm12, [rsp + LX_S10]
+%if %1 == 0
+    vpunpcklbw ymm10, ymm10, [rsp + LX_S01]
+    vpunpcklbw ymm12, ymm12, [rsp + LX_S11]
+%else
+    vpunpckhbw ymm10, ymm10, [rsp + LX_S01]
+    vpunpckhbw ymm12, ymm12, [rsp + LX_S11]
+%endif
+    vmovdqa ymm9, [rsp + LX_WXY]
+    vpshufb ymm8, ymm9, [lx_pw0 + 32*%1]    ; (64 − fx, fx) в каждое слово пикселя
+    vpshufb ymm9, ymm9, [lx_pw2 + 32*%1]    ; (64 − fy, fy)
+    vpmaddubsw ymm10, ymm10, ymm8
+    vpmaddubsw ymm12, ymm12, ymm8
+    vpsrlw  ymm10, ymm10, 6                 ; верхний ряд
+    vpsrlw  ymm12, ymm12, 6                 ; нижний
+    vpsllw  ymm12, ymm12, 8
+    vpor    ymm10, ymm10, ymm12
+    vpmaddubsw ymm10, ymm10, ymm9
+    vpsrlw  ymm10, ymm10, 6                 ; L: B, G, R, видимость
+    vmovdqa xmm7, [rsp + LX_N2P + 16*%1]
     vpcmpeqd ymm8, ymm8, ymm8
+    vpxor   ymm9, ymm9, ymm9
     vpgatherdq ymm9, [rsi + xmm7*8 + (amb_d - albedo)], ymm8
-    vpsubusw ymm10, ymm10, ymm9         ; грань видит меньше неба
-    vmovdqa xmm8, [rsp + LX_AO + 16*%1]
-    LXBC    ymm8, xmm8
-    vpblendw ymm8, ymm8, [lt_w256], 0x88
+    vpsubusw ymm10, ymm10, ymm9             ; грань видит меньше неба
+    vmovdqa ymm8, [rsp + LX_AO]
+    vpshufb ymm8, ymm8, [lx_pao + 32*%1]    ; (m, m, m, 256)
     vpmullw ymm10, ymm10, ymm8
-    vpsrlw  ymm10, ymm10, 8             ; и низ у стен, заборов, стволов — AO
-    vpmovzxbw ymm11, [rsi + rcx*4 + (lbuf - albedo) + 16*%1]
-    vmovdqa xmm6, [rsp + LX_OWN + 16*%1]
-    LXBC    ymm6, xmm6
-    vpblendvb ymm10, ymm10, ymm11, ymm6 ; свой свет — из lbuf
+    vpsrlw  ymm10, ymm10, 8                 ; и низ у стен, заборов, стволов — AO
+    vmovdqu ymm11, [rsi + rcx*4 + (lbuf - albedo)]
+%if %1 == 0
+    vpunpcklbw ymm11, ymm11, ymm13
+%else
+    vpunpckhbw ymm11, ymm11, ymm13
+%endif
+    vmovdqa ymm6, [rsp + LX_OWN]
+    vpshufb ymm6, ymm6, [lx_pw0 + 32*%1]
+    vpblendvb ymm10, ymm10, ymm11, ymm6     ; свой свет — из lbuf
     vpcmpeqd ymm8, ymm8, ymm8
+    vpxor   ymm9, ymm9, ymm9
     vpgatherdq ymm9, [rsi + xmm7*8 + (moon_n - albedo)], ymm8
-    vmovdqa xmm12, [rsp + LX_MV + 16*%1]
-    LXBC    ymm12, xmm12
-    vpmullw ymm9, ymm9, ymm12           ; луна по нормали
-    vpsrlw  ymm9, ymm9, 8
+    vmovdqa ymm12, [rsp + LX_MV]
+    vpshufb ymm12, ymm12, [lx_p8 + 32*%1]   ; MV << 8
+    vpmulhuw ymm9, ymm9, ymm12              ; луна по нормали (moon_n ≤ 255)
     vpaddw  ymm10, ymm10, ymm9
-    vpaddw  ymm10, ymm10, [rsi + rcx*8 + (dlb - albedo) + 32*%1]   ; огни (dl_row)
-    vpminsw ymm10, ymm10, [lx_wlmax]    ; L: свет до 1023, видимость до 255
+    vpaddw  ymm10, ymm10, [rsp + r10*8 + LX_DLB + 32*%1]   ; огни (dl_row8)
+    vpminsw ymm10, ymm10, [lx_wlmax]        ; L: свет до 1023, видимость до 255
     ; альбедо · L / 128 — как в light_rows: (a << 7)·(L << 2) >> 16
-    vmovdqa xmm0, [rsp + LX_A + 16*%1]
-    vpmovzxbw ymm1, xmm0
+    vmovdqa ymm0, [rsp + LX_A]
+%if %1 == 0
+    vpunpcklbw ymm1, ymm0, ymm13
+%else
+    vpunpckhbw ymm1, ymm0, ymm13
+%endif
     vpsllw  ymm2, ymm1, 7
     vpsllw  ymm3, ymm10, 2
-    vpmulhuw ymm2, ymm2, ymm3           ; X
-    vpslld  xmm3, xmm0, 1
-    vpsrad  xmm3, xmm3, 31              ; искра на снегу (бит 30) — вдвое
-    LXBC    ymm3, xmm3
+    vpmulhuw ymm2, ymm2, ymm3               ; X
+    vpshufb ymm0, ymm0, [lx_pa3 + 32*%1]    ; байт флагов — во все байты пикселя
+    vpsllw  ymm3, ymm0, 1
+    vpsraw  ymm3, ymm3, 15                  ; искра на снегу (бит 30) — вдвое
     vpand   ymm3, ymm3, ymm2
     vpaddw  ymm2, ymm2, ymm3
     ; пересвет белеет: каждому каналу — доля сильнейшего сверх порога (grade.inc)
-    vpshuflw ymm3, ymm2, 0xC9
-    vpshufhw ymm3, ymm3, 0xC9           ; G R B A
+    vpshufb ymm3, ymm2, [lx_rot1]           ; G R B A
     vpmaxsw ymm3, ymm3, ymm2
-    vpshuflw ymm4, ymm2, 0xD2
-    vpshufhw ymm4, ymm4, 0xD2           ; R B G A
+    vpshufb ymm4, ymm2, [lx_rot2]           ; R B G A
     vpmaxsw ymm3, ymm3, ymm4
     vpsubusw ymm3, ymm3, [hl_k2]
     vpmulhuw ymm3, ymm3, [hl_kk]
@@ -205,8 +244,10 @@ LX_SZ    equ 1088
     vextracti128 xmm4, ymm2, 1
     vpmovzxwd ymm4, xmm4
     vpcmpeqd ymm5, ymm5, ymm5
+    vpxor   ymm6, ymm6, ymm6
     vpgatherdd ymm6, [rsi + ymm3*4 + (tm_lut - albedo)], ymm5
     vpcmpeqd ymm5, ymm5, ymm5
+    vpxor   ymm7, ymm7, ymm7
     vpgatherdd ymm7, [rsi + ymm4*4 + (tm_lut - albedo)], ymm5
     vpackusdw ymm2, ymm6, ymm7
     vpermq  ymm2, ymm2, 0xD8
@@ -214,8 +255,8 @@ LX_SZ    equ 1088
     ; позёмка: X += (летящий снег − X)·доля/64 (доля 0 — без изменений)
     cmp     dword [rsp + LX_DRF], 0
     je      %%nd
-    vmovdqa xmm3, [rsp + LX_D + 16*%1]
-    LXBC    ymm3, xmm3
+    vmovdqa ymm3, [rsp + LX_D]
+    vpshufb ymm3, ymm3, [lx_pw0 + 32*%1]
     vpminsw ymm4, ymm10, [lx_w255]
     vpmullw ymm4, ymm4, [lx_w190]       ; свет·190/64, не ярче 255
     vpsrlw  ymm4, ymm4, 6
@@ -225,49 +266,48 @@ LX_SZ    equ 1088
     vpsraw  ymm4, ymm4, 6
     vpaddw  ymm2, ymm2, ymm4
 %%nd:
-    vpxor   ymm3, ymm3, ymm3
-    vpmaxsw ymm2, ymm2, ymm3
-    vpminsw ymm2, ymm2, [lx_w255]       ; X, насыщено до 255
-    ; «память» вне обзора (видимость V < 255): тусклый серо-синий
-    vpshufb ymm3, ymm10, [lx_bw3]       ; V в каждое слово пикселя
-    vpmaddwd ymm4, ymm2, [lx_gray]
-    vpshufd ymm5, ymm4, 0xB1
-    vpaddd  ymm4, ymm4, ymm5
-    vpsrld  ymm4, ymm4, 2
-    vpshufb ymm4, ymm4, [lx_bw0]        ; яркость
-    vpmullw ymm4, ymm4, [rsp + LX_MEMT]
-    vpsrlw  ymm4, ymm4, 7
+    vpmaxsw ymm2, ymm2, ymm13
+    vpminsw ymm2, ymm2, [lx_w255]           ; X, насыщено до 255
+    ; «память» вне обзора (видимость V < 255): тусклый серо-синий; все видны — мимо
+    vpshufb ymm3, ymm10, [lx_bw3]           ; V в каждое слово пикселя
+    vpcmpeqw ymm6, ymm3, [lx_w255]
+    vpmovmskb eax, ymm6
+    cmp     eax, -1
+    je      %%vis
+    vpmaddwd ymm4, ymm2, [lx_gray64]        ; 64·(B + 2G) | 64·R
+    vpsrlq  ymm5, ymm4, 32
+    vpaddd  ymm4, ymm4, ymm5                ; 64·(B + 2G + R) ≤ 65280 — младший дворд
+    vpshufb ymm4, ymm4, [lx_plum]           ; его байт 1 — яркость (>> 2) — в старший байт
+    vpmulhuw ymm4, ymm4, [rsp + LX_MEMT2]   ; яркость·memt >> 7
     vpaddw  ymm4, ymm4, [rsp + LX_HAZE]
     vpmullw ymm5, ymm2, ymm3
-    vmovdqa ymm6, [lx_w255]
-    vpsubw  ymm6, ymm6, ymm3
-    vpmullw ymm4, ymm4, ymm6
+    vpxor   ymm7, ymm3, [lx_w255]           ; 255 − V
+    vpmullw ymm4, ymm4, ymm7
     vpaddw  ymm5, ymm5, ymm4
     vpsrlw  ymm5, ymm5, 8
-    vmovdqa ymm6, [lx_w255]
-    vpcmpgtw ymm6, ymm6, ymm3
-    vpblendvb ymm2, ymm2, ymm5, ymm6
+    vpblendvb ymm2, ymm5, ymm2, ymm6        ; V = 255 — как есть
+%%vis:
     ; оттенок кадра
     vpmullw ymm2, ymm2, [rsp + LX_TINT]
     vpsrlw  ymm2, ymm2, 8
-    ; эмиссивные — своим цветом, без света
-    vpsrad  xmm3, xmm0, 31
-    LXBC    ymm3, xmm3
-    vpblendvb ymm2, ymm2, ymm1, ymm3
-    ; виньетка и зерно
-    vmovdqa xmm3, [rsp + LX_VG + 16*%1]
-    LXBC    ymm3, xmm3
-    vpmullw ymm2, ymm2, ymm3
-    vpsrlw  ymm2, ymm2, 8
-    vmovdqa xmm5, [rsp + LX_GR + 16*%1]
-    LXBC    ymm5, xmm5
+    ; эмиссивные — своим цветом, без света (бит 7 байта флагов)
+    vpblendvb ymm2, ymm2, ymm1, ymm0
+    ; виньетка (vg << 8 — vpmulhuw) и зерно
+    vmovdqa ymm3, [rsp + LX_VG]
+    vpshufb ymm3, ymm3, [lx_pq8 + 32*%1]
+    vpmulhuw ymm2, ymm2, ymm3
+    vmovdqa ymm5, [rsp + LX_GR]
+    vpshufb ymm5, ymm5, [lx_pw0 + 32*%1]
     vpaddsw ymm2, ymm2, ymm5
-    vpackuswb ymm2, ymm2, ymm2
-    vpermq  ymm2, ymm2, 0x08            ; 4 пикселя — в низ
-    vpxor   xmm3, xmm3, xmm3
-    vpcmpeqd xmm3, xmm3, xmm0           ; пустота — ноль
-    vpandn  xmm2, xmm3, xmm2
-    vmovdqu [r8 + rcx*4 + 16*%1], xmm2
+%if %1 == 0
+    vmovdqa [rsp + LX_XA], ymm2
+%else
+    vmovdqa ymm3, [rsp + LX_XA]
+    vpackuswb ymm2, ymm3, ymm2              ; A, B -> 8 пикселей подряд
+    vpcmpeqd ymm3, ymm13, [rsp + LX_A]      ; пустота — ноль
+    vpandn  ymm2, ymm3, ymm2
+    vmovdqu [r8 + rcx*4], ymm2
+%endif
 %endmacro
 
 ; строки ecx .. edx−1 — как light_rows (с любого потока пула)
@@ -277,8 +317,10 @@ light_rows_x:
     push    rdi
     push    rbp
     mov     rbp, rsp
-    sub     rsp, LX_SZ
+    test    byte [rsp - 4096], 0        ; кадр ~7 КБ (строки dlb, mfsh): стек растёт по
+    sub     rsp, LX_SZ                  ; сторожевой странице — трогаем по порядку
     and     rsp, -32
+    test    byte [rsp], 0
     imul    eax, edx, SCR_W
     mov     [rsp + LX_END], eax
     mov     ebx, CY0
@@ -318,7 +360,8 @@ light_rows_x:
     vpbroadcastq ymm0, [tint_vec]
     vmovdqa [rsp + LX_TINT], ymm0
     vpbroadcastq ymm0, [memtint_v]
-    vmovdqa [rsp + LX_MEMT], ymm0
+    vpaddw  ymm0, ymm0, ymm0
+    vmovdqa [rsp + LX_MEMT2], ymm0
     vpbroadcastq ymm0, [haze_v]
     vmovdqa [rsp + LX_HAZE], ymm0
     mov     eax, [moon_on]
@@ -328,9 +371,12 @@ light_rows_x:
     mov     [rsp + LX_PIX], ecx
     mov     ecx, CY0
     sub     ecx, ebx
+    lea     rdx, [rsp + LX_DLB]
+    lea     r8, [rsp + LX_MFS]
     call    dl_row8
     mov     ecx, [rsp + LX_PIX]
     mov     r8, [fbbits]
+    xor     r10d, r10d                  ; x в строке (dlb, mfsh — строкой в кадре)
     vmovd   xmm0, ebx
     vpbroadcastd ymm0, xmm0
     vmovdqa [rsp + LX_ROWZ], ymm0
@@ -358,8 +404,10 @@ light_rows_x:
     je      .nomoon
     vpand   ymm6, ymm5, [lx_d3f]
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm8, ymm8, ymm8
     vpgatherdd ymm8, [rsi + ymm6*8 + (msh - albedo)], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm9, ymm9, ymm9
     vpgatherdd ymm9, [rsi + ymm6*8 + (msh - albedo) + 4], ymm7
     vpaddd  ymm8, ymm8, ymm2
     vpsubd  ymm8, ymm8, [rsp + LX_MOX]
@@ -386,14 +434,15 @@ light_rows_x:
     LXCELL  SW8*4, ymm5
     LXCELL  SW8*4 + 4, ymm6
     vpsrld  ymm15, ymm15, 10            ; дошло луны 0..255
-    vpmovzxbd ymm0, [rsi + rcx + (mfsh - albedo)]
+    vpmovzxbd ymm0, [rsp + r10 + LX_MFS]
     vpsubd  ymm0, ymm0, [lx_dm1]
     vpmulld ymm15, ymm15, ymm0
     vpsrld  ymm15, ymm15, 8             ; и мимо фигур (dl_row8)
 .nomoon:
     vmovdqa [rsp + LX_MV], ymm15
-    ; ----- AO у земли (как в light_rows): множитель 0..256 (ymm2–4 не трогает)
-    vmovdqa ymm12, [lx_d256]
+    ; ----- AO у земли (как в light_rows): множитель 0..256 (ymm2–4 не трогает);
+    ; словом выше — 256 (четвёртому слову пикселя в LXHALF)
+    vmovdqa ymm12, [lx_dao0]
     vmovdqa ymm5, [lx_d32]
     vpcmpgtd ymm5, ymm5, ymm4           ; z < AO_ZF
     vptest  ymm5, ymm5
@@ -409,8 +458,10 @@ light_rows_x:
     vpslld  ymm9, ymm9, 10              ; · AOW
     vpaddd  ymm8, ymm8, ymm9
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm12, ymm12, ymm12
     vpgatherdd ymm12, [rsi + ymm8*1 + (ao16 - albedo)], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm13, ymm13, ymm13
     vpgatherdd ymm13, [rsi + ymm8*1 + (ao16 - albedo) + AOW], ymm7
     vpshufb ymm12, ymm12, [lx_bw01]     ; a00 | a01 << 16
     vpshufb ymm13, ymm13, [lx_bw01]     ; a10 | a11 << 16
@@ -439,6 +490,7 @@ light_rows_x:
     vpmaddwd ymm12, ymm12, ymm14
     vpsrld  ymm12, ymm12, 5
     vpsubd  ymm12, ymm13, ymm12
+    vpor    ymm12, ymm12, [lx_dao1]
 .aod:
     vmovdqa [rsp + LX_AO], ymm12
     ; ----- сетка света: сэмпл, доли, 4 выборки
@@ -452,18 +504,30 @@ light_rows_x:
     vpand   ymm9, ymm7, [lx_d63]
     vmovdqa [rsp + LX_FX], ymm8
     vmovdqa [rsp + LX_FY], ymm9
+    ; веса билинейки байтами: f = fx | fy << 16 -> (f << 8) − f + 64 | 64 << 16 =
+    ; 64 − fx, fx, 64 − fy, fy
+    vpslld  ymm10, ymm9, 16
+    vpor    ymm10, ymm10, ymm8
+    vpslld  ymm11, ymm10, 8
+    vpsubd  ymm11, ymm11, ymm10
+    vpaddd  ymm11, ymm11, [lx_dw64]
+    vmovdqa [rsp + LX_WXY], ymm11
     vpsrld  ymm6, ymm6, 6
     vpsrld  ymm7, ymm7, 6
     vpmaddwd ymm7, ymm7, [lx_dgw]
     vpaddd  ymm6, ymm6, ymm7            ; сэмпл
     vmovdqa [rsp + LX_SIDX], ymm6
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm10, ymm10, ymm10
     vpgatherdd ymm10, [rsi + ymm6*4 + (lgs - albedo)], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm11, ymm11, ymm11
     vpgatherdd ymm11, [rsi + ymm6*4 + (lgs - albedo) + 4], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm12, ymm12, ymm12
     vpgatherdd ymm12, [rsi + ymm6*4 + (lgs - albedo) + GW*4], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm13, ymm13, ymm13
     vpgatherdd ymm13, [rsi + ymm6*4 + (lgs - albedo) + GW*4 + 4], ymm7
     vmovdqa [rsp + LX_S00], ymm10
     vmovdqa [rsp + LX_S01], ymm11
@@ -476,7 +540,8 @@ light_rows_x:
     vmovdqa [rsp + LX_OWN], ymm6
     vpand   ymm7, ymm6, [lx_dc0]
     vpandn  ymm7, ymm7, ymm5
-    vmovdqa [rsp + LX_N2], ymm7
+    vpermq  ymm7, ymm7, 0xD8            ; пиксели 0, 1, 4, 5 | 2, 3, 6, 7 — индексы половин
+    vmovdqa [rsp + LX_N2P], ymm7
     ; ----- позёмка: у земли (z < 12), где метёт — доля 0..60
     mov     dword [rsp + LX_DRF], 0
     cmp     dword [wg_on], 0
@@ -485,8 +550,10 @@ light_rows_x:
     vpcmpgtd ymm5, ymm5, ymm4           ; z < 12
     vmovdqa ymm6, [rsp + LX_SIDX]
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm8, ymm8, ymm8
     vpgatherdd ymm8, [rsi + ymm6*1 + (wgrid - albedo)], ymm7
     vpcmpeqd ymm7, ymm7, ymm7
+    vpxor   ymm9, ymm9, ymm9
     vpgatherdd ymm9, [rsi + ymm6*1 + (wgrid - albedo) + GW], ymm7
     vpand   ymm8, ymm8, [lx_dffff]      ; маска ветра: сэмпл и сосед справа
     vpand   ymm9, ymm9, [lx_dffff]      ; строкой ниже
@@ -529,6 +596,7 @@ light_rows_x:
     vpslld  ymm1, ymm1, 8
     vpaddd  ymm0, ymm0, ymm1
     vpcmpeqd ymm1, ymm1, ymm1
+    vpxor   ymm10, ymm10, ymm10
     vpgatherdd ymm10, [rsi + ymm0*1 + (strk - albedo)], ymm1
     vpand   ymm10, ymm10, [lx_dff]
     vpslld  ymm0, ymm15, 1              ; слой 2: вдоль·3
@@ -542,6 +610,7 @@ light_rows_x:
     vpslld  ymm1, ymm1, 8
     vpaddd  ymm0, ymm0, ymm1
     vpcmpeqd ymm1, ymm1, ymm1
+    vpxor   ymm6, ymm6, ymm6
     vpgatherdd ymm6, [rsi + ymm0*1 + (strk - albedo)], ymm1
     vpand   ymm6, ymm6, [lx_dff]
     vpaddd  ymm10, ymm10, ymm6
@@ -559,7 +628,7 @@ light_rows_x:
     vmovdqa [rsp + LX_D], ymm10
 .nodrift:
     ; ----- виньетка и зерно: байты (c + k + grain_off) & 0xFFFF — подряд, кроме стыка
-    vpmovzxbd ymm3, [rsi + rcx + (vign - albedo)]
+    vpbroadcastq ymm3, [rsi + rcx + (vign - albedo)]
     vmovdqa [rsp + LX_VG], ymm3
     mov     eax, [rsp + LX_GOFF]
     add     eax, ecx
@@ -575,6 +644,7 @@ light_rows_x:
     vpaddd  ymm3, ymm3, [rsp + LX_GOFF]
     vpand   ymm3, ymm3, [lx_dffff]
     vpcmpeqd ymm4, ymm4, ymm4
+    vpxor   ymm5, ymm5, ymm5
     vpgatherdd ymm5, [rsi + ymm3*1 + (grain - albedo)], ymm4
     vpslld  ymm5, ymm5, 24
     vpsrad  ymm5, ymm5, 24
@@ -585,6 +655,7 @@ light_rows_x:
     LXHALF  1
 .next:
     add     ecx, 8
+    add     r10d, 8
     dec     edi
     jnz     .grp
     dec     ebx
@@ -668,7 +739,9 @@ DX_TG       equ 1440                    ; тени зомби от фонари�
 DX_TMF      equ 1448                    ; фигуры под луной по плиткам строки (адрес)
 DX_WM       equ 1456                    ; отсев капсул: запас на полутень огня
 DX_CMB      equ 1472                    ; тени фигур: дорожки, где тень что-то решает
-DX_SZ       equ 1504
+DX_DLB      equ 1504                    ; строка dlb у вызывающего (адрес)
+DX_MFS      equ 1512                    ; строка mfsh (адрес)
+DX_SZ       equ 1536
 
 ; 16 байт на пиксель из [rsi + (%1 − albedo) + nid·16]: пиксели 0..3 — в нижние
 ; половины ymm4..7, 4..7 — в верхние (для TR4Y)
@@ -750,7 +823,10 @@ DX_SZ       equ 1504
     vmulps  ymm0, ymm0, ymm8
 %endmacro
 
-; ecx = строка -> dlb (как dl_row); сохраняет rbx, rsi, rdi, rbp, r12–r15, ymm портит все
+; ecx = строка, rdx -> строка dlb, r8 -> строка mfsh (у light_rows_x в кадре: пишутся и
+; тут же читаются — из L1, без промахов по буферам на весь кадр); dlb — половинами по
+; группам: пиксели 0, 1 | 4, 5, потом 2, 3 | 6, 7 (как их берёт LXHALF). Сохраняет rbx,
+; rsi, rdi, rbp, r12–r15, ymm портит все
 dl_row8:
     push    rbx
     push    rsi
@@ -765,6 +841,8 @@ dl_row8:
     and     rsp, -32
     mov     rbp, rsp
     mov     [rbp + DX_RSP], rax
+    mov     [rbp + DX_DLB], rdx
+    mov     [rbp + DX_MFS], r8
     lea     rsi, [albedo]
     mov     eax, CY0
     sub     eax, ecx
@@ -919,7 +997,8 @@ dl_row8:
     call    .mf
     jmp     .g3
 .g2:
-    mov     qword [rsi + r12 + (mfsh - albedo)], -1
+    mov     rdx, [rbp + DX_MFS]
+    mov     qword [rdx + r13], -1
 .g3:
     vxorps  ymm13, ymm13, ymm13
     vxorps  ymm14, ymm14, ymm14
@@ -1338,29 +1417,29 @@ dl_row8:
     vmulps  ymm14, ymm14, ymm0
     vmulps  ymm15, ymm15, ymm0
 .st:
-    ; B, G, R по дорожкам -> 8 пикселей по 4 слова (половины — как у dl_row)
+    ; B, G, R по дорожкам -> пиксели по 4 слова (B, G, R, 0), половинами LXHALF
     vcvtps2dq ymm13, ymm13
     vcvtps2dq ymm14, ymm14
     vcvtps2dq ymm15, ymm15
-    vpackssdw ymm13, ymm13, ymm13
-    vpackssdw ymm14, ymm14, ymm14
-    vpackssdw ymm15, ymm15, ymm15
-    vpunpcklwd ymm13, ymm13, ymm14      ; B0 G0 B1 G1 B2 G2 B3 G3 | то же 4..7
     vpxor   ymm0, ymm0, ymm0
-    vpunpcklwd ymm15, ymm15, ymm0       ; R0 0 R1 0 ...
-    vpunpckhdq ymm1, ymm13, ymm15       ; пиксели 2, 3 | 6, 7
-    vpunpckldq ymm13, ymm13, ymm15      ; 0, 1 | 4, 5
-    vperm2i128 ymm0, ymm13, ymm1, 0x20  ; 0..3
-    vperm2i128 ymm1, ymm13, ymm1, 0x31  ; 4..7
-    vmovdqu [rsi + r12*8 + (dlb - albedo)], ymm0
-    vmovdqu [rsi + r12*8 + (dlb - albedo) + 32], ymm1
+    vpackssdw ymm13, ymm13, ymm14       ; B0 B1 B2 B3 G0 G1 G2 G3 | то же 4..7
+    vpackssdw ymm15, ymm15, ymm0        ; R0 R1 R2 R3 0 0 0 0
+    vpunpcklwd ymm14, ymm13, ymm15      ; B0 R0 B1 R1 ...
+    vpunpckhwd ymm13, ymm13, ymm15      ; G0 0 G1 0 ...
+    vpunpcklwd ymm1, ymm14, ymm13       ; пиксели 0, 1 | 4, 5
+    vpunpckhwd ymm14, ymm14, ymm13      ; 2, 3 | 6, 7
+    mov     rdx, [rbp + DX_DLB]
+    vmovdqu [rdx + r13*8], ymm1
+    vmovdqu [rdx + r13*8 + 32], ymm14
     jmp     .next
 .gzero:
-    mov     qword [rsi + r12 + (mfsh - albedo)], -1
+    mov     rdx, [rbp + DX_MFS]
+    mov     qword [rdx + r13], -1
 .gz1:
     vpxor   ymm0, ymm0, ymm0
-    vmovdqu [rsi + r12*8 + (dlb - albedo)], ymm0
-    vmovdqu [rsi + r12*8 + (dlb - albedo) + 32], ymm0
+    mov     rdx, [rbp + DX_DLB]
+    vmovdqu [rdx + r13*8], ymm0
+    vmovdqu [rdx + r13*8 + 32], ymm0
 .next:
     add     r12d, 8
     add     r13d, 8
@@ -2105,7 +2184,8 @@ dl_row8:
     vextracti128 xmm0, ymm5, 1
     vpackssdw xmm5, xmm5, xmm0
     vpackuswb xmm5, xmm5, xmm5
-    vmovq   [rsi + r12 + (mfsh - albedo)], xmm5
+    mov     rax, [rbp + DX_MFS]
+    vmovq   [rax + r13], xmm5
     ret
 
 ; рамки четвёрок по их дорожкам со светом (DX_BB, один раз на группу)
