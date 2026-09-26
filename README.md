@@ -23,7 +23,7 @@ dawn at 08:00 (about nine and a half real minutes).
 
 There is no engine, no libraries beyond the Windows system DLLs, and no asset
 files. The village, trees, people, light, weather and sound are all produced by
-~54k lines of hand-written NASM. The game is a single 588 KB executable.
+~55k lines of hand-written NASM. The game is a single 790 KB executable.
 
 **What's inside**
 
@@ -69,17 +69,17 @@ files. The village, trees, people, light, weather and sound are all produced by
   blank dazzles you in the same way, and standing in the dark lets you see a
   little further. Bloom leaves a faint red halation around bright lights.
 - **Fast on every core.** Per-row passes run on a small thread pool. Objects
-  and roofs are drawn in horizontal screen bands at once: every band replays
+  and roofs are drawn in eight horizontal screen bands at once: every band replays
   the same painter's order but writes only its own rows, and the band edges
-  follow last frame's timings. The moon shadow sweep and the flashlight's ray
+  follow last frame's timings. Particles are drawn the same way. The moon shadow sweep and the flashlight's ray
   fan run on a background thread from the start of the frame until the light
   pass needs them. Scaling
   to the window, the HUD and presenting happen on their own output thread,
-  while the next frame is being rendered. Lighting and the
-  floor have AVX2 paths (8 pixels per step) next to the SSE2 ones. Every path
+  while the next frame is being rendered. Lighting, the floor, bloom, grading
+  and the frost light pillars have AVX2 paths (8 pixels per step) next to the
+  SSE2 ones. Every path
   produces the same frame down to the byte, which is checked against the
-  single-threaded SSE2 build. On an i7-7700 a frame takes about 5 ms
-  (around 200 fps).
+  single-threaded SSE2 build. On an i7-7700 a frame takes 4–5 ms.
 - **The world.** Gabled snow roofs are rasterized in world planes with
   per-pixel depth. There are snow drifts with normals, and footprints and blood
   that stay in the snow. Walls are cut away around the player, and collisions
@@ -217,8 +217,8 @@ runs `--bench` and prints min / median / p90 for every pass.
 это примерно девять с половиной минут.
 
 Ни движка, ни библиотек, кроме системных DLL Windows, ни файлов с ресурсами.
-Село, деревья, люди, свет, погода и звук целиком получаются из ~54 тыс. строк
-NASM, написанных руками. Вся игра — один exe на 588 КБ.
+Село, деревья, люди, свет, погода и звук целиком получаются из ~55 тыс. строк
+NASM, написанных руками. Вся игра — один exe на 790 КБ.
 
 **Что внутри**
 
@@ -259,15 +259,15 @@ NASM, написанных руками. Вся игра — один exe на 5
   со временем видишь чуть дальше. Блум оставляет вокруг ярких огней лёгкий
   красноватый ореол, как халация на плёнке.
 - **На всех ядрах.** Построчные проходы идут на пуле потоков. Объекты и крыши
-  рисуются сразу горизонтальными полосами экрана: каждая полоса проходит тот же
+  рисуются сразу восемью горизонтальными полосами экрана: каждая полоса проходит тот же
   порядок художника, но пишет только свои строки, а границы полос следуют за
-  временем прошлого кадра. Тени луны и веер лучей фонарика считаются фоновым
+  временем прошлого кадра. Так же рисуются частицы. Тени луны и веер лучей фонарика считаются фоновым
   потоком с начала кадра до прохода света. Растяжка под окно, HUD и вывод идут в
   своём потоке, пока
-  считается следующий кадр. У освещения и пола
-  есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
+  считается следующий кадр. У освещения, пола, блума, цветокоррекции и столбов
+  света в мороз есть пути на AVX2 (8 пикселей за шаг) рядом с SSE2. Все пути дают один и тот
   же кадр до байта, это сверяется с однопоточной SSE2-сборкой. На i7-7700 кадр
-  занимает около 5 мс (около 200 fps).
+  занимает 4–5 мс.
 - **Мир.** Двускатные крыши в снегу растеризуются в мировых плоскостях с
   попиксельной глубиной. Есть сугробы с нормалями, следы и кровь, которые
   остаются на снегу. Стены срезаются вокруг игрока, а столкновения повторяют
